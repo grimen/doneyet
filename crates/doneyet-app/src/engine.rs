@@ -143,6 +143,10 @@ async fn push_or_tick(
     }
 }
 
+fn rate_limit_backoff(retry_after: Duration, floor: Duration) -> Duration {
+    retry_after.max(floor).min(Duration::from_secs(60))
+}
+
 pub fn aggregate_conclusion(runs: &[WorkflowRun]) -> Conclusion {
     if runs.iter().any(|run| {
         matches!(
@@ -196,7 +200,20 @@ impl CommitWatchEngine {
             if self.shutdown.is_cancelled() {
                 return Ok(WatchOutcome::Interrupted);
             }
-            let page = self.provider.list_runs(&query).await?;
+            let page = match self.provider.list_runs(&query).await {
+                Ok(page) => page,
+                Err(ProviderError::RateLimited { retry_after }) => {
+                    tracing::warn!("rate limited; backing off {:?}", retry_after);
+                    let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
+                    if push_or_tick(&mut self.push, &mut self.push_dead, &self.shutdown, backoff)
+                        .await
+                    {
+                        return Ok(WatchOutcome::Interrupted);
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             sink.render_page(&page)?;
             let all_terminal =
                 !page.runs.is_empty() && page.runs.iter().all(|run| run.phase.is_terminal());
@@ -255,7 +272,20 @@ impl DashEngine {
             if self.shutdown.is_cancelled() {
                 return Ok(DashOutcome::Interrupted);
             }
-            let page = self.provider.list_runs(&query).await?;
+            let page = match self.provider.list_runs(&query).await {
+                Ok(page) => page,
+                Err(ProviderError::RateLimited { retry_after }) => {
+                    tracing::warn!("rate limited; backing off {:?}", retry_after);
+                    let backoff = rate_limit_backoff(retry_after, self.config.interval);
+                    if push_or_tick(&mut self.push, &mut self.push_dead, &self.shutdown, backoff)
+                        .await
+                    {
+                        return Ok(DashOutcome::Interrupted);
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             sink.render_page(&page)?;
             let interval = self.config.interval;
             if push_or_tick(
@@ -310,63 +340,97 @@ impl WatchEngine {
             if self.shutdown.is_cancelled() {
                 return Ok(WatchOutcome::Interrupted);
             }
-            match self.locate_run(&target).await? {
-                None => {
+            let run_opt = match self.locate_run(&target).await {
+                Ok(None) => {
                     if let Some(outcome) = self.wait_tick(self.config.idle_interval).await {
                         return Ok(outcome);
                     }
+                    None
                 }
-                Some(run) => {
-                    let jobs = self.provider.list_jobs(run.id).await?;
-                    let job_logs = self.tail_logs(&jobs).await;
-                    let stats = match previous.as_ref().and_then(|world| world.stats.clone()) {
-                        Some(stats) => Some(stats),
-                        None => self.fetch_stats(&target, &run).await,
-                    };
-                    let mut annotations = Vec::new();
-                    for job in &jobs {
-                        if job.phase.is_failed() {
-                            match self.provider.list_annotations(job.id).await {
-                                Ok(mut ann) => annotations.append(&mut ann),
-                                Err(e) => tracing::warn!("annotations fetch failed: {e}"),
-                            }
-                        }
-                    }
-                    let world = World {
-                        repo: self.repo.clone(),
-                        run,
-                        jobs,
-                        annotations,
-                        stats,
-                        job_logs,
-                    };
-                    let events = diff_worlds(previous.as_ref(), &world);
-                    let conclusion = match &world.run.phase {
-                        Phase::Done(conclusion) => Some(conclusion.clone()),
-                        _ => None,
-                    };
-                    self.renderer.render(&world, &events)?;
-                    previous = Some(world);
-                    if let Some(conclusion) = conclusion {
-                        let outcome = Outcome {
-                            run: previous
-                                .as_ref()
-                                .expect("world was just stored")
-                                .run
-                                .ref_of(),
-                            conclusion: conclusion.clone(),
-                        };
-                        self.renderer.finish(&outcome)?;
-                        return Ok(WatchOutcome::Completed(conclusion));
-                    }
-                    if let Some(outcome) = self.wait_tick(self.config.active_interval).await {
+                Ok(Some(run)) => Some(run),
+                Err(ProviderError::RateLimited { retry_after }) => {
+                    tracing::warn!("rate limited; backing off {:?}", retry_after);
+                    let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
+                    if let Some(outcome) = self.wait_tick(backoff).await {
                         return Ok(outcome);
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let Some(run) = run_opt else {
+                continue;
+            };
+            let jobs = match self.provider.list_jobs(run.id).await {
+                Ok(jobs) => jobs,
+                Err(ProviderError::RateLimited { retry_after }) => {
+                    tracing::warn!("rate limited; backing off {:?}", retry_after);
+                    let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
+                    if let Some(outcome) = self.wait_tick(backoff).await {
+                        return Ok(outcome);
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let job_logs = self.tail_logs(&jobs).await;
+            let stats = match previous.as_ref().and_then(|world| world.stats.clone()) {
+                Some(stats) => Some(stats),
+                None => self.fetch_stats(&target, &run).await,
+            };
+            let mut annotations = Vec::new();
+            for job in &jobs {
+                if job.phase.is_failed() {
+                    match self.provider.list_annotations(job.id).await {
+                        Ok(mut ann) => annotations.append(&mut ann),
+                        Err(ProviderError::RateLimited { retry_after }) => {
+                            tracing::warn!(
+                                "annotations rate limited; backing off {:?}",
+                                retry_after
+                            );
+                            let backoff =
+                                rate_limit_backoff(retry_after, self.config.active_interval);
+                            if let Some(outcome) = self.wait_tick(backoff).await {
+                                return Ok(outcome);
+                            }
+                            continue;
+                        }
+                        Err(e) => tracing::warn!("annotations fetch failed: {e}"),
                     }
                 }
             }
+            let world = World {
+                repo: self.repo.clone(),
+                run,
+                jobs,
+                annotations,
+                stats,
+                job_logs,
+            };
+            let events = diff_worlds(previous.as_ref(), &world);
+            let conclusion = match &world.run.phase {
+                Phase::Done(conclusion) => Some(conclusion.clone()),
+                _ => None,
+            };
+            self.renderer.render(&world, &events)?;
+            previous = Some(world);
+            if let Some(conclusion) = conclusion {
+                let outcome = Outcome {
+                    run: previous
+                        .as_ref()
+                        .expect("world was just stored")
+                        .run
+                        .ref_of(),
+                    conclusion: conclusion.clone(),
+                };
+                self.renderer.finish(&outcome)?;
+                return Ok(WatchOutcome::Completed(conclusion));
+            }
+            if let Some(outcome) = self.wait_tick(self.config.active_interval).await {
+                return Ok(outcome);
+            }
         }
     }
-
     async fn wait_tick(&mut self, interval: Duration) -> Option<WatchOutcome> {
         tokio::select! {
             _ = tokio::time::sleep(interval) => {}

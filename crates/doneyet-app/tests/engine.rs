@@ -841,3 +841,62 @@ async fn annotation_fetch_failure_does_not_abort_watch() {
         WatchOutcome::Completed(Conclusion::Failure)
     ));
 }
+
+#[tokio::test(start_paused = true)]
+async fn watch_survives_rate_limited_fetch_then_completes() {
+    let provider = FakeProvider::new(vec![
+        Step0::RateLimited(Duration::from_secs(1)),
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        config(),
+        CancellationToken::new(),
+    );
+    let start = tokio::time::Instant::now();
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("rate limit must not kill the watch");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+    assert!(
+        start.elapsed() >= Duration::from_secs(1),
+        "watch must back off for at least the retry_after duration"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancel_interrupts_rate_limit_backoff() {
+    let provider = FakeProvider::new(vec![
+        Step0::RateLimited(Duration::from_secs(10)),
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    let shutdown = CancellationToken::new();
+    let cancel = shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        cancel.cancel();
+    });
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(RecordingRenderer::default()),
+        Box::new(NoopPushSource),
+        config(),
+        shutdown,
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("cancelled watch is not an error");
+    assert!(matches!(outcome, WatchOutcome::Interrupted));
+}

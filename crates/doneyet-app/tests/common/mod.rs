@@ -13,6 +13,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 pub fn ts(s: &str) -> Timestamp {
@@ -87,6 +88,7 @@ pub enum Step0 {
     Fail(String),
     World(World),
     Page(RunsPage),
+    RateLimited(Duration),
 }
 
 type AnnotationScript = Mutex<HashMap<u64, VecDeque<Result<Vec<Annotation>, String>>>>;
@@ -204,6 +206,9 @@ impl RunSource for FakeProvider {
                 runs: vec![world.run],
             }),
             Step0::Page(page) => Ok(page),
+            Step0::RateLimited(duration) => Err(ProviderError::RateLimited {
+                retry_after: duration,
+            }),
         }
     }
 
@@ -222,12 +227,18 @@ impl RunSource for FakeProvider {
                 .into_iter()
                 .next()
                 .expect("page step needs at least one run")),
+            Step0::RateLimited(duration) => Err(ProviderError::RateLimited {
+                retry_after: duration,
+            }),
         }
     }
 
     async fn list_jobs(&self, _run_id: u64) -> Result<Vec<Job>, ProviderError> {
         match self.state.current() {
             Step0::World(world) => Ok(world.jobs),
+            Step0::RateLimited(duration) => Err(ProviderError::RateLimited {
+                retry_after: duration,
+            }),
             _ => Ok(Vec::new()),
         }
     }
