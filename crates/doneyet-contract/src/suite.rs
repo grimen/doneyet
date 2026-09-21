@@ -23,6 +23,7 @@ pub async fn run_suite<F: ProviderFactory>(factory: &F) {
     list_jobs_maps_jobs_and_steps(factory).await;
     list_annotations_maps_fields(factory).await;
     job_logs_returns_bytes(factory).await;
+    job_logs_from_returns_the_unseen_suffix(factory).await;
     sends_bearer_token(factory).await;
     unauthorized_maps_to_auth(factory).await;
     not_found_maps_message(factory).await;
@@ -227,6 +228,24 @@ async fn job_logs_returns_bytes<F: ProviderFactory>(factory: &F) {
         .await
         .expect("job_logs succeeds");
     assert_eq!(String::from_utf8_lossy(&logs), body);
+    server.verify().await;
+}
+
+async fn job_logs_from_returns_the_unseen_suffix<F: ProviderFactory>(factory: &F) {
+    let (server, provider) = setup(factory).await;
+    let body = "alpha\nbeta\n";
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/jobs/399444496/logs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let chunk = provider
+        .job_logs_from(399444496, 6)
+        .await
+        .expect("job_logs_from succeeds");
+    assert_eq!(chunk.bytes, b"beta\n");
+    assert_eq!(chunk.next_offset, body.len() as u64);
     server.verify().await;
 }
 

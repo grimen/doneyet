@@ -1,11 +1,14 @@
 use std::time::Duration;
 
 use doneyet_core::diff::diff_worlds;
+use std::collections::HashMap;
+
+use doneyet_core::logtail::{LogCursor, append_log, display_lines};
 use doneyet_core::model::{
-    Conclusion, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
+    Conclusion, Job, JobLog, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
 };
 use doneyet_core::ports::{
-    ProviderError, PushSource, RefreshHint, RenderError, Renderer, RunSource,
+    PipelineProvider, ProviderError, PushSource, RefreshHint, RenderError, Renderer, RunSource,
 };
 use doneyet_core::stats::WorkflowStats;
 use tokio_util::sync::CancellationToken;
@@ -37,6 +40,7 @@ impl WatchOutcome {
 pub struct WatchConfig {
     pub active_interval: Duration,
     pub idle_interval: Duration,
+    pub log_tail: Option<usize>,
 }
 
 impl Default for WatchConfig {
@@ -44,6 +48,7 @@ impl Default for WatchConfig {
         Self {
             active_interval: Duration::from_secs(3),
             idle_interval: Duration::from_secs(20),
+            log_tail: None,
         }
     }
 }
@@ -175,18 +180,19 @@ impl DashEngine {
 
 pub struct WatchEngine {
     repo: RepoRef,
-    provider: Box<dyn RunSource>,
+    provider: Box<dyn PipelineProvider>,
     renderer: Box<dyn Renderer>,
     push: Box<dyn PushSource>,
     push_dead: bool,
     config: WatchConfig,
     shutdown: CancellationToken,
+    cursors: HashMap<u64, LogCursor>,
 }
 
 impl WatchEngine {
     pub fn new(
         repo: RepoRef,
-        provider: Box<dyn RunSource>,
+        provider: Box<dyn PipelineProvider>,
         renderer: Box<dyn Renderer>,
         push: Box<dyn PushSource>,
         config: WatchConfig,
@@ -200,6 +206,7 @@ impl WatchEngine {
             push_dead: false,
             config,
             shutdown,
+            cursors: HashMap::new(),
         }
     }
 
@@ -217,6 +224,7 @@ impl WatchEngine {
                 }
                 Some(run) => {
                     let jobs = self.provider.list_jobs(run.id).await?;
+                    let job_logs = self.tail_logs(&jobs).await;
                     let stats = match previous.as_ref().and_then(|world| world.stats.clone()) {
                         Some(stats) => Some(stats),
                         None => self.fetch_stats(&target, &run).await,
@@ -227,6 +235,7 @@ impl WatchEngine {
                         jobs,
                         annotations: Vec::new(),
                         stats,
+                        job_logs,
                     };
                     let events = diff_worlds(previous.as_ref(), &world);
                     let conclusion = match &world.run.phase {
@@ -270,6 +279,69 @@ impl WatchEngine {
             _ = self.shutdown.cancelled() => return Some(WatchOutcome::Interrupted),
         }
         None
+    }
+
+    async fn tail_logs(&mut self, jobs: &[Job]) -> Vec<JobLog> {
+        let Some(limit) = self.config.log_tail else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for job in jobs {
+            if !matches!(job.phase, Phase::InProgress) && !job.phase.is_failed() {
+                continue;
+            }
+            let offset = self
+                .cursors
+                .get(&job.id)
+                .map(|cursor| cursor.offset)
+                .unwrap_or(0);
+            let chunk = match self.provider.job_logs_from(job.id, offset).await {
+                Ok(chunk) if chunk.next_offset < offset => {
+                    if let Some(cursor) = self.cursors.get_mut(&job.id) {
+                        cursor.lines.clear();
+                        cursor.pending.clear();
+                        cursor.offset = 0;
+                    }
+                    match self.provider.job_logs_from(job.id, 0).await {
+                        Ok(chunk) => chunk,
+                        Err(error) => {
+                            tracing::warn!("job {} logs unavailable ({error})", job.id);
+                            self.push_previous_tail(job.id, &mut out);
+                            continue;
+                        }
+                    }
+                }
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    tracing::warn!("job {} logs unavailable ({error})", job.id);
+                    self.push_previous_tail(job.id, &mut out);
+                    continue;
+                }
+            };
+            let cursor = self.cursors.entry(job.id).or_default();
+            append_log(cursor, &chunk, limit);
+            let lines = display_lines(cursor, limit);
+            if !lines.is_empty() {
+                out.push(JobLog {
+                    job_id: job.id,
+                    lines,
+                });
+            }
+        }
+        out
+    }
+
+    fn push_previous_tail(&self, job_id: u64, out: &mut Vec<JobLog>) {
+        let Some(limit) = self.config.log_tail else {
+            return;
+        };
+        let Some(cursor) = self.cursors.get(&job_id) else {
+            return;
+        };
+        let lines = display_lines(cursor, limit);
+        if !lines.is_empty() {
+            out.push(JobLog { job_id, lines });
+        }
     }
 
     async fn fetch_stats(&self, target: &WatchTarget, run: &WorkflowRun) -> Option<WorkflowStats> {

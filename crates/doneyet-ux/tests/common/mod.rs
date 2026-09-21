@@ -119,6 +119,7 @@ pub fn active_world() -> World {
         },
         run,
         jobs: vec![build, test, deploy, notify],
+        job_logs: Vec::new(),
     }
 }
 

@@ -110,6 +110,11 @@ impl TermRenderer {
             for step in job.steps.iter().filter(|s| interesting_step(s)) {
                 lines.push(step_line(step, theme, &palette, width));
             }
+            if let Some(tail) = world.job_logs.iter().find(|log| log.job_id == job.id) {
+                for line in &tail.lines {
+                    lines.push(log_line(line, theme, width));
+                }
+            }
             if job_is_failed(&job.phase) {
                 for annotation in world.annotations.iter().filter(|a| a.job_id == job.id) {
                     lines.push(annotation_line(annotation, theme, &palette, width));
@@ -451,6 +456,11 @@ fn job_is_failed(phase: &Phase) -> bool {
         phase,
         Phase::Done(Conclusion::Failure | Conclusion::TimedOut | Conclusion::StartupFailure)
     )
+}
+
+fn log_line(line: &str, theme: &Theme, width: usize) -> String {
+    let text = fit(line, width.saturating_sub(6));
+    format!("  {}  {text}", theme.connector)
 }
 
 fn annotation_line(

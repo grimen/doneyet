@@ -13,6 +13,7 @@ fn config() -> WatchConfig {
     WatchConfig {
         active_interval: Duration::from_secs(3),
         idle_interval: Duration::from_secs(20),
+        log_tail: None,
     }
 }
 
@@ -641,4 +642,135 @@ async fn dash_provider_error_aborts() {
         .expect_err("provider failure aborts");
     assert!(error.to_string().contains("boom"), "{error}");
     assert!(sink.pages.lock().expect("pages poisoned").is_empty());
+}
+
+fn logs_config(tail: usize) -> WatchConfig {
+    WatchConfig {
+        log_tail: Some(tail),
+        ..config()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_appends_log_tails_from_the_previous_offset() {
+    use doneyet_core::ports::LogChunk;
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    provider.script_log(
+        1,
+        Ok(LogChunk {
+            bytes: b"one\n".to_vec(),
+            next_offset: 4,
+        }),
+    );
+    provider.script_log(
+        1,
+        Ok(LogChunk {
+            bytes: b"two\nthree\n".to_vec(),
+            next_offset: 14,
+        }),
+    );
+    let handle = provider.handle();
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        logs_config(2),
+        CancellationToken::new(),
+    );
+    engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("log tail must not fail the watch");
+    let frames = renderer.frames();
+    assert_eq!(frames[0].0.job_logs[0].lines, vec!["one".to_string()]);
+    assert_eq!(
+        frames[1].0.job_logs[0].lines,
+        vec!["two".to_string(), "three".to_string()]
+    );
+    assert_eq!(handle.log_calls(), vec![(1, 0), (1, 4)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn log_fetch_failure_does_not_abort_watch() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    provider.script_log(1, Err("logs down".to_string()));
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        logs_config(5),
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("a dead log fetch must not kill the watch");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+    assert!(renderer.frames()[0].0.job_logs.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn replaced_log_is_refetched_from_the_start() {
+    use doneyet_core::ports::LogChunk;
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    provider.script_log(
+        1,
+        Ok(LogChunk {
+            bytes: b"hello\n".to_vec(),
+            next_offset: 6,
+        }),
+    );
+    provider.script_log(
+        1,
+        Ok(LogChunk {
+            bytes: Vec::new(),
+            next_offset: 0,
+        }),
+    );
+    provider.script_log(
+        1,
+        Ok(LogChunk {
+            bytes: b"new\n".to_vec(),
+            next_offset: 4,
+        }),
+    );
+    let handle = provider.handle();
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        logs_config(20),
+        CancellationToken::new(),
+    );
+    engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("replaced log must not fail the watch");
+    assert_eq!(
+        renderer.frames()[1].0.job_logs[0].lines,
+        vec!["new".to_string()]
+    );
+    assert_eq!(handle.log_calls(), vec![(1, 0), (1, 6), (1, 0)]);
 }

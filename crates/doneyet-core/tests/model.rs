@@ -175,6 +175,7 @@ fn world_parses_legacy_recordings_without_annotations() {
             steps: Vec::new(),
         }],
         stats: None,
+        job_logs: Vec::new(),
         annotations: vec![Annotation {
             job_id: 7,
             path: Some("src/lib.rs".to_string()),

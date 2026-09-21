@@ -222,6 +222,12 @@ pub struct Annotation {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobLog {
+    pub job_id: u64,
+    pub lines: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct World {
     pub repo: RepoRef,
@@ -231,6 +237,8 @@ pub struct World {
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<crate::stats::WorkflowStats>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub job_logs: Vec<JobLog>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

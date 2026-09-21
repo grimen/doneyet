@@ -5,9 +5,11 @@ use doneyet_core::model::{Annotation, Outcome};
 use doneyet_core::model::{
     Conclusion, Job, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
 };
-use doneyet_core::ports::{AnnotationSource, LogSource, ProviderError, RefreshHint, RunSource};
+use doneyet_core::ports::{
+    AnnotationSource, LogChunk, LogSource, ProviderError, RefreshHint, RunSource,
+};
 use jiff::Timestamp;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,6 +50,7 @@ pub fn world(phase: Phase, jobs: Vec<Job>) -> World {
         jobs,
         annotations: Vec::new(),
         stats: None,
+        job_logs: Vec::new(),
     }
 }
 
@@ -82,6 +85,8 @@ pub struct FakeState {
     cursor: AtomicUsize,
     locate_calls: Mutex<Vec<tokio::time::Instant>>,
     history: Mutex<RunsPage>,
+    log_script: Mutex<HashMap<u64, VecDeque<Result<LogChunk, String>>>>,
+    log_calls: Mutex<Vec<(u64, u64)>>,
 }
 
 impl FakeProvider {
@@ -95,8 +100,20 @@ impl FakeProvider {
                     total_count: 0,
                     runs: Vec::new(),
                 }),
+                log_script: Mutex::new(HashMap::new()),
+                log_calls: Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    pub fn script_log(&self, job_id: u64, reply: Result<LogChunk, String>) {
+        self.state
+            .log_script
+            .lock()
+            .expect("log script poisoned")
+            .entry(job_id)
+            .or_default()
+            .push_back(reply);
     }
 
     pub fn with_history(steps: Vec<Step0>, history: Vec<WorkflowRun>) -> Self {
@@ -120,6 +137,10 @@ impl FakeState {
 
     pub fn locate_calls(&self) -> Vec<tokio::time::Instant> {
         self.locate_calls.lock().expect("log poisoned").clone()
+    }
+
+    pub fn log_calls(&self) -> Vec<(u64, u64)> {
+        self.log_calls.lock().expect("log calls poisoned").clone()
     }
 
     fn advance(&self) -> Step0 {
@@ -190,6 +211,29 @@ impl AnnotationSource for FakeProvider {
 impl LogSource for FakeProvider {
     async fn job_logs(&self, _job_id: u64) -> Result<Vec<u8>, ProviderError> {
         Ok(Vec::new())
+    }
+
+    async fn job_logs_from(&self, job_id: u64, offset: u64) -> Result<LogChunk, ProviderError> {
+        self.state
+            .log_calls
+            .lock()
+            .expect("log calls poisoned")
+            .push((job_id, offset));
+        let reply = self
+            .state
+            .log_script
+            .lock()
+            .expect("log script poisoned")
+            .get_mut(&job_id)
+            .and_then(|queue| queue.pop_front());
+        match reply {
+            Some(Ok(chunk)) => Ok(chunk),
+            Some(Err(message)) => Err(ProviderError::Other(message)),
+            None => Ok(LogChunk {
+                bytes: Vec::new(),
+                next_offset: offset,
+            }),
+        }
     }
 }
 

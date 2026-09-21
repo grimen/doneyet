@@ -32,6 +32,30 @@ fn bare_repo_arg_with_flags_becomes_watch() {
 }
 
 #[test]
+fn watch_logs_flag_defaults_to_twenty() {
+    use clap::Parser;
+    use doneyet_cli::{Cli, Command};
+
+    let cli = Cli::parse_from(["doneyet", "watch", "acme/api", "--logs"]);
+    match cli.command {
+        Command::Watch { logs, .. } => assert_eq!(logs, Some(20)),
+        other => panic!("expected watch, got {other:?}"),
+    }
+}
+
+#[test]
+fn watch_logs_flag_accepts_an_explicit_count() {
+    use clap::Parser;
+    use doneyet_cli::{Cli, Command};
+
+    let cli = Cli::parse_from(["doneyet", "watch", "acme/api", "--logs", "5"]);
+    match cli.command {
+        Command::Watch { logs, .. } => assert_eq!(logs, Some(5)),
+        other => panic!("expected watch, got {other:?}"),
+    }
+}
+
+#[test]
 fn dash_is_a_subcommand_not_a_repo() {
     let out = inject_default_subcommand(vec!["doneyet".to_string(), "dash".to_string()]);
     assert_eq!(out, vec!["doneyet".to_string(), "dash".to_string()]);

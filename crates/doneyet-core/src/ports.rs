@@ -25,9 +25,24 @@ pub trait RunSource: Send + Sync {
     async fn list_jobs(&self, run_id: u64) -> Result<Vec<Job>, ProviderError>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogChunk {
+    pub bytes: Vec<u8>,
+    pub next_offset: u64,
+}
+
 #[async_trait::async_trait]
 pub trait LogSource: Send + Sync {
     async fn job_logs(&self, job_id: u64) -> Result<Vec<u8>, ProviderError>;
+
+    async fn job_logs_from(&self, job_id: u64, offset: u64) -> Result<LogChunk, ProviderError> {
+        let all = self.job_logs(job_id).await?;
+        let start = usize::try_from(offset).unwrap_or(all.len()).min(all.len());
+        Ok(LogChunk {
+            bytes: all[start..].to_vec(),
+            next_offset: all.len() as u64,
+        })
+    }
 }
 
 #[async_trait::async_trait]

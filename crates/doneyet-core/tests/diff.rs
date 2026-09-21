@@ -84,6 +84,7 @@ fn world(run_phase: Phase, jobs: Vec<Job>) -> World {
         jobs,
         annotations: Vec::new(),
         stats: None,
+        job_logs: Vec::new(),
     }
 }
 

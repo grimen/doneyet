@@ -50,6 +50,13 @@ pub enum Command {
         webhook_secret: Option<String>,
         #[arg(long, help = "Record every rendered frame to PATH as JSONL")]
         record: Option<String>,
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "20",
+            help = "Tail the last N log lines of in-progress and failed jobs (default 20)"
+        )]
+        logs: Option<usize>,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -179,6 +186,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             webhook,
             webhook_secret,
             record,
+            logs,
             common,
         } => {
             watch(
@@ -190,6 +198,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     webhook,
                     webhook_secret,
                     record,
+                    logs,
                 },
                 common,
             )
@@ -298,6 +307,7 @@ struct WatchOptions {
     webhook: Option<String>,
     webhook_secret: Option<String>,
     record: Option<String>,
+    logs: Option<usize>,
 }
 
 async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
@@ -365,6 +375,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     let config = WatchConfig {
         active_interval: Duration::from_secs(opts.interval.max(1)),
         idle_interval: Duration::from_secs(20),
+        log_tail: opts.logs,
     };
     let mut engine = WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
     let outcome = engine.watch(WatchTarget::Latest(query)).await?;
@@ -502,6 +513,7 @@ async fn inspect_run(
         jobs,
         annotations,
         stats: None,
+        job_logs: Vec::new(),
     };
     let color = color_enabled(&common);
     let width = terminal_width(&common);
