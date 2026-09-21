@@ -16,6 +16,7 @@ fn config() -> WatchConfig {
         idle_interval: Duration::from_secs(20),
         log_tail: None,
         log_grep: None,
+        job: None,
         timeout: None,
     }
 }
@@ -1028,6 +1029,97 @@ async fn watch_completes_before_timeout() {
         WatchOutcome::Completed(Conclusion::Success)
     ));
     assert_eq!(renderer.frames().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_with_job_filter_renders_only_matching_jobs() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(world(
+            Phase::InProgress,
+            vec![
+                job(1, "build (linux)", Phase::InProgress),
+                job(2, "test (macos-latest)", Phase::InProgress),
+            ],
+        )),
+        Step0::World(world(
+            Phase::Done(Conclusion::Success),
+            vec![
+                job(1, "build (linux)", Phase::Done(Conclusion::Success)),
+                job(2, "test (macos-latest)", Phase::Done(Conclusion::Success)),
+            ],
+        )),
+    ]);
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        WatchConfig {
+            job: Some("test".to_string()),
+            ..config()
+        },
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("watch should succeed");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+    let frames = renderer.frames();
+    assert!(!frames.is_empty(), "at least one frame must render");
+    for (frame, _) in &frames {
+        let names: Vec<&str> = frame.jobs.iter().map(|job| job.name.as_str()).collect();
+        assert_eq!(names, vec!["test (macos-latest)"], "{names:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_with_job_filter_continues_when_no_jobs_match() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(world(
+            Phase::InProgress,
+            vec![
+                job(1, "build (linux)", Phase::InProgress),
+                job(2, "test (macos-latest)", Phase::InProgress),
+            ],
+        )),
+        Step0::World(world(
+            Phase::Done(Conclusion::Success),
+            vec![
+                job(1, "build (linux)", Phase::Done(Conclusion::Success)),
+                job(2, "test (macos-latest)", Phase::Done(Conclusion::Success)),
+            ],
+        )),
+    ]);
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        WatchConfig {
+            job: Some("nope".to_string()),
+            ..config()
+        },
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("an empty filtered job list must not stop the watch");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+    let frames = renderer.frames();
+    assert!(!frames.is_empty(), "at least one frame must render");
+    for (frame, _) in &frames {
+        assert!(frame.jobs.is_empty(), "no job may survive the filter");
+    }
 }
 
 #[tokio::test(start_paused = true)]

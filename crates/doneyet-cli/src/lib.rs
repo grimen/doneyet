@@ -94,6 +94,11 @@ pub enum Command {
         grep: Option<String>,
         #[arg(
             long,
+            help = "Watch only jobs whose name contains NAME (case-sensitive substring)"
+        )]
+        job: Option<String>,
+        #[arg(
+            long,
             help = "Fire a desktop notification (notify-send) when the run finishes"
         )]
         notify: bool,
@@ -255,6 +260,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             record,
             logs,
             grep,
+            job,
             notify,
             format,
             common,
@@ -273,6 +279,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     record,
                     logs,
                     grep,
+                    job,
                     notify,
                     format,
                 },
@@ -403,6 +410,7 @@ struct WatchOptions {
     record: Option<String>,
     logs: Option<usize>,
     grep: Option<String>,
+    job: Option<String>,
     notify: bool,
     format: OutFormat,
 }
@@ -416,6 +424,9 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     }
     if opts.timeout.is_some() && (opts.commit.is_some() || opts.pr.is_some()) {
         anyhow::bail!("--timeout is only available for run watching (--run-id or the latest run)");
+    }
+    if opts.job.is_some() && (opts.commit.is_some() || opts.pr.is_some()) {
+        anyhow::bail!("--job is only available for run watching (--run-id or the latest run)");
     }
     if json && opts.record.is_some() {
         anyhow::bail!("--format json cannot be combined with --record");
@@ -472,6 +483,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         idle_interval: Duration::from_secs(20),
         log_tail: opts.logs,
         log_grep: opts.grep,
+        job: opts.job.clone(),
         timeout: opts.timeout.map(Duration::from_secs),
     };
     let commit_sha = match (opts.commit.clone(), opts.pr) {

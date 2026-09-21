@@ -15,6 +15,11 @@ const COMPLETED_RUN_PAGE: &str = r#"{"total_count":1,"workflow_runs":[{"id":2841
 
 const EMPTY_JOBS: &str = r#"{"total_count":0,"jobs":[]}"#;
 
+const JOB_FILTER_JOBS: &str = r#"{"total_count":2,"jobs":[
+  {"id":1,"run_id":2841,"status":"completed","conclusion":"success","name":"make (arm64)","started_at":"2026-09-21T10:00:02Z","completed_at":"2026-09-21T10:01:30Z","runner_name":"gh-runner-01","labels":["arm64"],"steps":[]},
+  {"id":2,"run_id":2841,"status":"in_progress","conclusion":null,"name":"test (macos-latest)","started_at":"2026-09-21T10:01:31Z","completed_at":null,"runner_name":null,"labels":["macos-latest"],"steps":[]}
+]}"#;
+
 #[test]
 fn completions_bash_exits_zero_and_mentions_doneyet() {
     let output = doneyet()
@@ -232,6 +237,59 @@ async fn watch_timeout_rejects_commit_mode() {
     assert_eq!(output.status.code(), Some(4), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("timeout"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_with_job_filter_filters_rendered_jobs() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(COMPLETED_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(JOB_FILTER_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--job",
+            "test",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("test (macos-latest)"), "{stdout}");
+    assert!(!stdout.contains("make (arm64)"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_job_filter_rejects_commit_mode() {
+    let output = doneyet()
+        .args(["watch", "acme/api", "--commit", "abc", "--job", "test"])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("job"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

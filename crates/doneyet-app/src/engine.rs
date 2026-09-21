@@ -44,6 +44,7 @@ pub struct WatchConfig {
     pub idle_interval: Duration,
     pub log_tail: Option<usize>,
     pub log_grep: Option<String>,
+    pub job: Option<String>,
     pub timeout: Option<Duration>,
 }
 
@@ -54,6 +55,7 @@ impl Default for WatchConfig {
             idle_interval: Duration::from_secs(20),
             log_tail: None,
             log_grep: None,
+            job: None,
             timeout: None,
         }
     }
@@ -172,6 +174,16 @@ pub fn aggregate_conclusion(runs: &[WorkflowRun]) -> Conclusion {
         Conclusion::Cancelled
     } else {
         Conclusion::Success
+    }
+}
+
+fn filter_jobs(jobs: Vec<Job>, needle: Option<&str>) -> Vec<Job> {
+    match needle {
+        Some(needle) => jobs
+            .into_iter()
+            .filter(|job| job.name.contains(needle))
+            .collect(),
+        None => jobs,
     }
 }
 
@@ -436,6 +448,7 @@ impl WatchEngine {
                 }
                 Err(e) => return Err(e.into()),
             };
+            let jobs = filter_jobs(jobs, self.config.job.as_deref());
             let job_logs = self.tail_logs(&jobs).await;
             let stats = match previous.as_ref().and_then(|world| world.stats.clone()) {
                 Some(stats) => Some(stats),

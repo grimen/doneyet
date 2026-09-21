@@ -157,8 +157,9 @@ Milestone 6 complete — all planned MVP milestones shipped:
   runs of the same workflow. `--logs` tails the last N lines of
   in-progress and failed jobs (default 20); a log fetch failure does not
   stop the watch. `--grep PATTERN` filters tailed lines to those
-  containing the substring. `--notify` fires a desktop notification
-  (`notify-send`) when the run finishes
+  containing the substring. `--job NAME` shows only jobs whose name
+  contains NAME (case-sensitive substring); watch only. `--notify` fires
+  a desktop notification (`notify-send`) when the run finishes
 - transient network/transport errors and 5xx/429 API failures are retried
   with backoff; `watch` (and `dash`/`--commit` modes) survives them instead
   of aborting
