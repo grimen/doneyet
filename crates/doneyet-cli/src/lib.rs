@@ -133,6 +133,8 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
     },
+    /// Generate shell completions
+    Completions { shell: clap_complete::Shell },
 }
 
 #[derive(Debug, Args)]
@@ -157,11 +159,12 @@ fn resolve_theme(common: &CommonArgs) -> anyhow::Result<doneyet_ux::Theme> {
     doneyet_ux::load_theme(&common.theme).map_err(|error| anyhow::anyhow!("{error}"))
 }
 
-const KNOWN_SUBCOMMANDS: [&str; 9] = [
+const KNOWN_SUBCOMMANDS: [&str; 10] = [
     "watch",
     "runs",
     "run",
     "dash",
+    "completions",
     "help",
     "--help",
     "-h",
@@ -255,6 +258,15 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             realtime,
             common,
         } => replay_file(path, realtime, common).await,
+        Command::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut <Cli as clap::CommandFactory>::command(),
+                "doneyet",
+                &mut std::io::stdout(),
+            );
+            Ok(0)
+        }
     }
 }
 

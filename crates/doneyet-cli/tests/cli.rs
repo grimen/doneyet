@@ -14,6 +14,28 @@ const COMPLETED_RUN_PAGE: &str = r#"{"total_count":1,"workflow_runs":[{"id":2841
 
 const EMPTY_JOBS: &str = r#"{"total_count":0,"jobs":[]}"#;
 
+#[test]
+fn completions_bash_exits_zero_and_mentions_doneyet() {
+    let output = doneyet()
+        .args(["completions", "bash"])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("doneyet"), "{stdout}");
+}
+
+#[test]
+fn completions_zsh_exits_zero_and_mentions_doneyet() {
+    let output = doneyet()
+        .args(["completions", "zsh"])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("doneyet"), "{stdout}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn runs_command_lists_runs_and_exits_zero() {
     let server = MockServer::start().await;

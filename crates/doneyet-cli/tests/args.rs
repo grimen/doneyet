@@ -110,7 +110,15 @@ fn dash_is_a_subcommand_not_a_repo() {
 
 #[test]
 fn known_subcommands_are_untouched() {
-    for arg in ["watch", "runs", "run", "dash", "help", "--version"] {
+    for arg in [
+        "watch",
+        "runs",
+        "run",
+        "dash",
+        "completions",
+        "help",
+        "--version",
+    ] {
         let out = inject_default_subcommand(vec!["doneyet".to_string(), arg.to_string()]);
         assert_eq!(out, vec!["doneyet".to_string(), arg.to_string()], "{arg}");
     }
