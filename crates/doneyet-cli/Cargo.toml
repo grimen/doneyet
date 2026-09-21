@@ -34,5 +34,6 @@ doneyet-contract = { workspace = true }
 hex = { workspace = true }
 hmac = { workspace = true }
 reqwest = { workspace = true }
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 wiremock = { workspace = true }

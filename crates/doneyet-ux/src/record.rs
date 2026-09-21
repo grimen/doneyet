@@ -52,25 +52,29 @@ impl<W: Write> TeeRenderer<W> {
     }
 
     fn write_line<S: Serialize>(&mut self, record: S) {
-        let Some(sink) = self.sink.as_mut() else {
+        write_json_line(&mut self.sink, &record)
+    }
+}
+
+fn write_json_line<W: Write, S: Serialize>(sink: &mut Option<BufWriter<W>>, record: &S) {
+    let Some(out) = sink.as_mut() else {
+        return;
+    };
+    let line = match serde_json::to_string(record) {
+        Ok(line) => line,
+        Err(error) => {
+            tracing::warn!("recording disabled: serialize failed: {error}");
+            *sink = None;
             return;
-        };
-        let line = match serde_json::to_string(&record) {
-            Ok(line) => line,
-            Err(error) => {
-                tracing::warn!("recording disabled: serialize failed: {error}");
-                self.sink = None;
-                return;
-            }
-        };
-        if sink
-            .write_all(line.as_bytes())
-            .and_then(|_| sink.write_all(b"\n"))
-            .is_err()
-        {
-            tracing::warn!("recording disabled: sink write failed");
-            self.sink = None;
         }
+    };
+    if out
+        .write_all(line.as_bytes())
+        .and_then(|_| out.write_all(b"\n"))
+        .is_err()
+    {
+        tracing::warn!("recording disabled: sink write failed");
+        *sink = None;
     }
 }
 
@@ -107,4 +111,48 @@ fn now_epoch_millis() -> u64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0)
+}
+
+pub struct JsonlRenderer<W: Write> {
+    sink: Option<BufWriter<W>>,
+}
+
+impl<W: Write> JsonlRenderer<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            sink: Some(BufWriter::new(writer)),
+        }
+    }
+}
+
+impl<W: Write + Send> Renderer for JsonlRenderer<W> {
+    fn render(&mut self, world: &World, events: &[DomainEvent]) -> RenderResult<()> {
+        write_json_line(
+            &mut self.sink,
+            &RenderRecord {
+                v: RECORD_VERSION,
+                kind: "render".to_string(),
+                ts: Some(now_epoch_millis()),
+                world: world.clone(),
+                events: events.to_vec(),
+            },
+        );
+        Ok(())
+    }
+
+    fn finish(&mut self, outcome: &Outcome) -> RenderResult<()> {
+        write_json_line(
+            &mut self.sink,
+            &FinishRecord {
+                v: RECORD_VERSION,
+                kind: "finish".to_string(),
+                ts: Some(now_epoch_millis()),
+                outcome: outcome.clone(),
+            },
+        );
+        if let Some(sink) = self.sink.as_mut() {
+            let _ = sink.flush();
+        }
+        Ok(())
+    }
 }

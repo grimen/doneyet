@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use assert_cmd::Command;
+use doneyet_core::model::Conclusion;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -158,6 +159,68 @@ async fn watch_command_follows_run_until_terminal() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("in_progress"), "{stdout}");
     assert!(stdout.contains("success"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_with_format_json_emits_jsonl_and_exits_zero() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(COMPLETED_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--format",
+            "json",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines.len() >= 2, "expected render + finish lines: {stdout}");
+    let first: doneyet_ux::record::RenderRecord =
+        serde_json::from_str(lines[0]).expect("line 1 parses as a render record");
+    assert_eq!(first.kind, "render", "{first:?}");
+    assert_eq!(first.v, 1, "{first:?}");
+    assert_eq!(first.world.run.id, 2841, "{first:?}");
+    let last: doneyet_ux::record::FinishRecord =
+        serde_json::from_str(lines[lines.len() - 1]).expect("last parses as a finish record");
+    assert_eq!(last.kind, "finish", "{last:?}");
+    assert_eq!(last.outcome.conclusion, Conclusion::Success, "{last:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_format_json_rejects_commit_mode() {
+    let output = doneyet()
+        .args(["watch", "acme/api", "--commit", "abc", "--format", "json"])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("json"), "{stderr}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

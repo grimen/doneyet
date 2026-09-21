@@ -2,7 +2,7 @@ use common::{SharedBuf, active_world, now};
 use doneyet_core::event::DomainEvent;
 use doneyet_core::model::{Conclusion, Outcome, Phase, RunRef, World};
 use doneyet_core::ports::Renderer;
-use doneyet_ux::record::TeeRenderer;
+use doneyet_ux::record::{JsonlRenderer, TeeRenderer};
 use serde::Deserialize;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -184,4 +184,33 @@ fn recorded_frames_ignore_wall_clock() {
         "2026-09-21T10:00:00Z".parse::<jiff::Timestamp>().unwrap()
     );
     let _ = now();
+}
+
+#[test]
+fn jsonl_renderer_emits_same_schema_without_a_primary() {
+    let sink = SharedBuf::new();
+    let mut jsonl = JsonlRenderer::new(sink.clone());
+    let world = active_world();
+    let events = vec![DomainEvent::RunStarted {
+        run: world.run.ref_of(),
+    }];
+    jsonl.render(&world, &events).expect("render");
+    let final_outcome = outcome();
+    jsonl.finish(&final_outcome).expect("finish");
+    drop(jsonl);
+
+    let recorded = sink.take_string();
+    let lines: Vec<&str> = recorded.lines().collect();
+    assert_eq!(lines.len(), 2, "one JSONL line per call: {recorded:?}");
+
+    let render: RenderLine = serde_json::from_str(lines[0]).expect("line 1 parses");
+    assert_eq!(render.v, 1);
+    assert_eq!(render.kind, "render");
+    assert_eq!(render.world, world);
+    assert_eq!(render.events, events);
+
+    let finish: FinishLine = serde_json::from_str(lines[1]).expect("line 2 parses");
+    assert_eq!(finish.v, 1);
+    assert_eq!(finish.kind, "finish");
+    assert_eq!(finish.outcome, final_outcome);
 }

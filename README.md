@@ -115,11 +115,24 @@ doneyet replay run.jsonl               # instant dump
 doneyet replay run.jsonl --realtime    # at the recorded wall-clock pace
 ```
 
+## Scripting
+
+`watch --format json` writes the same versioned records straight to stdout,
+one per line, with no terminal decoration — pipe it into `jq` or another tool:
+
+```
+doneyet watch acme/api --format json | jq 'select(.kind == "finish") | .outcome'
+```
+
+The exit code is still the run's conclusion, so the command stays
+script-friendly. `--format json` only applies to run watching (`--run-id` or
+the latest run) and cannot be combined with `--record`.
+
 ## Status
 
 Milestone 6 complete — all planned MVP milestones shipped:
 
-- `doneyet watch [OWNER/NAME] [-b branch] [--commit SHA] [--pr N] [--run-id N] [--interval N]` —
+- `doneyet watch [OWNER/NAME] [-b branch] [--commit SHA] [--pr N] [--run-id N] [--interval N] [--format term|json]` —
   live inline redraw of the latest run; exits with the run's conclusion.
   With `--commit SHA` every workflow run for that commit is followed as a
   live table; `--pr N` resolves the PR head SHA and does the same. The exit

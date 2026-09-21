@@ -26,6 +26,12 @@ pub struct Cli {
     pub command: Command,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutFormat {
+    Term,
+    Json,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Watch the latest matching run live
@@ -82,6 +88,13 @@ pub enum Command {
             help = "Fire a desktop notification (notify-send) when the run finishes"
         )]
         notify: bool,
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = OutFormat::Term,
+            help = "Output format: term renders a live view, json emits JSONL records to stdout"
+        )]
+        format: OutFormat,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -219,6 +232,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             logs,
             grep,
             notify,
+            format,
             common,
         } => {
             watch(
@@ -235,6 +249,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     logs,
                     grep,
                     notify,
+                    format,
                 },
                 common,
             )
@@ -357,9 +372,19 @@ struct WatchOptions {
     logs: Option<usize>,
     grep: Option<String>,
     notify: bool,
+    format: OutFormat,
 }
 
 async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
+    let json = opts.format == OutFormat::Json;
+    if json && (opts.commit.is_some() || opts.pr.is_some()) {
+        anyhow::bail!(
+            "--format json is only available for run watching (--run-id or the latest run)"
+        );
+    }
+    if json && opts.record.is_some() {
+        anyhow::bail!("--format json cannot be combined with --record");
+    }
     let repo = repo::resolve(opts.repo.as_deref())?;
     let provider = build_provider(repo.clone(), &common)?;
     let (hint_tx, channel_push) = doneyet_app::ChannelPushSource::channel();
@@ -390,7 +415,11 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
             cancel.cancel();
         }
     });
-    let raw_mode = keys::RawModeGuard::enable();
+    let raw_mode = if json {
+        None
+    } else {
+        keys::RawModeGuard::enable()
+    };
     if raw_mode.is_some() {
         eprintln!("(q quit · r refresh)");
         keys::spawn(repo.clone(), shutdown.clone(), hint_tx.clone());
@@ -447,19 +476,23 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
                 limit: 1,
             }),
         };
-        let term = TermRenderer::with_theme(
-            stdout,
-            resolve_theme(&common)?,
-            color_enabled(&common),
-            terminal_width(&common),
-            Box::new(jiff::Timestamp::now),
-        );
-        let renderer: Box<dyn doneyet_core::ports::Renderer> = match opts.record {
-            Some(path) => Box::new(doneyet_ux::record::TeeRenderer::new(
-                Box::new(term),
-                std::path::Path::new(&path),
-            )?),
-            None => Box::new(term),
+        let renderer: Box<dyn doneyet_core::ports::Renderer> = if json {
+            Box::new(doneyet_ux::record::JsonlRenderer::new(stdout))
+        } else {
+            let term = TermRenderer::with_theme(
+                stdout,
+                resolve_theme(&common)?,
+                color_enabled(&common),
+                terminal_width(&common),
+                Box::new(jiff::Timestamp::now),
+            );
+            match opts.record {
+                Some(path) => Box::new(doneyet_ux::record::TeeRenderer::new(
+                    Box::new(term),
+                    std::path::Path::new(&path),
+                )?),
+                None => Box::new(term),
+            }
         };
         let mut engine =
             WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);

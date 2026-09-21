@@ -558,6 +558,7 @@ dependencies = [
  "hmac",
  "jiff",
  "reqwest",
+ "serde_json",
  "sha2",
  "tokio",
  "tokio-util",
