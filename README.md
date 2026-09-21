@@ -112,7 +112,8 @@ Milestone 6 complete — all planned MVP milestones shipped:
   (`3m12s (~1m28s left)`) derived from the median duration of recent
   runs of the same workflow. `--logs` tails the last N lines of
   in-progress and failed jobs (default 20); a log fetch failure does not
-  stop the watch
+  stop the watch. `--notify` fires a desktop notification (`notify-send`)
+  when the run finishes
 - `doneyet dash [OWNER/NAME] [--limit N] [--interval N]` — live recent-runs
   table until quit (`q` / `Esc` / `Ctrl-C`, exit `130`)
 - `doneyet runs [OWNER/NAME] [--limit N]` — colorful recent-runs table

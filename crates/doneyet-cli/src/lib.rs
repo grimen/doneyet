@@ -1,9 +1,11 @@
 pub mod keys;
+pub mod notify;
 pub mod repo;
 
 use clap::{Args, Parser, Subcommand};
 use doneyet_app::{
-    BoardSink, ChannelPushSource, DashConfig, DashEngine, WatchConfig, WatchEngine, WatchTarget,
+    BoardSink, ChannelPushSource, DashConfig, DashEngine, WatchConfig, WatchEngine, WatchOutcome,
+    WatchTarget,
 };
 use doneyet_core::model::{Outcome, Phase, RepoRef, RunsPage, RunsQuery, World};
 use doneyet_core::ports::{AnnotationSource, PushSource, Renderer, RunSource};
@@ -57,6 +59,11 @@ pub enum Command {
             help = "Tail the last N log lines of in-progress and failed jobs (default 20)"
         )]
         logs: Option<usize>,
+        #[arg(
+            long,
+            help = "Fire a desktop notification (notify-send) when the run finishes"
+        )]
+        notify: bool,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -187,6 +194,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             webhook_secret,
             record,
             logs,
+            notify,
             common,
         } => {
             watch(
@@ -199,6 +207,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     webhook_secret,
                     record,
                     logs,
+                    notify,
                 },
                 common,
             )
@@ -308,6 +317,7 @@ struct WatchOptions {
     webhook_secret: Option<String>,
     record: Option<String>,
     logs: Option<usize>,
+    notify: bool,
 }
 
 async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
@@ -379,6 +389,11 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     };
     let mut engine = WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
     let outcome = engine.watch(WatchTarget::Latest(query)).await?;
+    if opts.notify {
+        if let WatchOutcome::Completed(conclusion) = &outcome {
+            notify::send(conclusion);
+        }
+    }
     drop(raw_mode);
     Ok(outcome.exit_code() as u32)
 }

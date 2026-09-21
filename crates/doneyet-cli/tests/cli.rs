@@ -510,3 +510,46 @@ async fn run_without_logs_flag_shows_annotations_but_no_logs() {
         "no log section without the flag: {stdout}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_notify_fires_desktop_notification_on_completion() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("doneyet-notify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fake bin dir");
+    let marker = dir.join("marker");
+    let script = dir.join("notify-send");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\necho \"$@\" >> {}\n", marker.display()),
+    )
+    .expect("write fake notify-send");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake executable");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(COMPLETED_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let path = std::env::var("PATH").unwrap_or_default();
+    let output = doneyet()
+        .args(["watch", "acme/api", "--notify", "--api-base", &server.uri()])
+        .env("PATH", format!("{}:{path}", dir.display()))
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let called = std::fs::read_to_string(&marker).expect("notify-send was invoked");
+    assert!(called.contains("doneyet"), "{called}");
+    assert!(called.contains("succeeded"), "{called}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
