@@ -33,6 +33,12 @@ pub struct LogChunk {
 }
 
 #[async_trait::async_trait]
+pub trait RunWriteSource: Send + Sync {
+    async fn rerun(&self, run_id: u64, failed_only: bool) -> Result<(), ProviderError>;
+    async fn cancel(&self, run_id: u64) -> Result<(), ProviderError>;
+}
+
+#[async_trait::async_trait]
 pub trait LogSource: Send + Sync {
     async fn job_logs(&self, job_id: u64) -> Result<Vec<u8>, ProviderError>;
 

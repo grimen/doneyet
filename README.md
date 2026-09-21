@@ -167,6 +167,9 @@ Milestone 6 complete — all planned MVP milestones shipped:
   table until quit (`q` / `Esc` / `Ctrl-C`, exit `130`)
 - `doneyet runs [OWNER/NAME] [--limit N]` — colorful recent-runs table
 - `doneyet run <ID> [--repo OWNER/NAME]` — static single-run view + exit code
+- `doneyet rerun <ID> [--failed-only] [--repo OWNER/NAME]` — queue a rerun of the
+  whole run, or only its failed jobs with `--failed-only`
+- `doneyet cancel <ID> [--repo OWNER/NAME]` — cancel an in-progress run
 - bare `doneyet OWNER/NAME` is shorthand for `watch`
 - repo defaults from the `origin` git remote; token from `--token` /
   `DONEYET_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` / `gh auth token`

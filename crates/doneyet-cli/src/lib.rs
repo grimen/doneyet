@@ -9,7 +9,7 @@ use doneyet_app::{
     WatchTarget,
 };
 use doneyet_core::model::{Outcome, Phase, RepoRef, RunsPage, RunsQuery, World};
-use doneyet_core::ports::{AnnotationSource, PushSource, Renderer, RunSource};
+use doneyet_core::ports::{AnnotationSource, PushSource, Renderer, RunSource, RunWriteSource};
 use doneyet_github::{GithubConfig, GithubProvider};
 use doneyet_ux::{TermRenderer, stdout_color};
 use std::process::ExitCode;
@@ -166,6 +166,33 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
     },
+    /// Rerun a run (all jobs, or only the failed ones)
+    Rerun {
+        run_id: u64,
+        #[arg(
+            long,
+            help = "Rerun only the failed jobs instead of every job in the run"
+        )]
+        failed_only: bool,
+        #[arg(
+            long,
+            help = "OWNER/NAME; defaults to the origin remote of the current directory"
+        )]
+        repo: Option<String>,
+        #[command(flatten)]
+        common: CommonArgs,
+    },
+    /// Cancel an in-progress run
+    Cancel {
+        run_id: u64,
+        #[arg(
+            long,
+            help = "OWNER/NAME; defaults to the origin remote of the current directory"
+        )]
+        repo: Option<String>,
+        #[command(flatten)]
+        common: CommonArgs,
+    },
     /// Replay a recorded session (--record) offline
     Replay {
         path: String,
@@ -206,10 +233,12 @@ fn resolve_theme(
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
-const KNOWN_SUBCOMMANDS: [&str; 10] = [
+const KNOWN_SUBCOMMANDS: [&str; 12] = [
     "watch",
     "runs",
     "run",
+    "rerun",
+    "cancel",
     "dash",
     "completions",
     "help",
@@ -309,6 +338,17 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             logs_failed,
             common,
         } => inspect_run(run_id, repo, logs_failed, common).await,
+        Command::Rerun {
+            run_id,
+            failed_only,
+            repo,
+            common,
+        } => rerun_run(run_id, failed_only, repo, common).await,
+        Command::Cancel {
+            run_id,
+            repo,
+            common,
+        } => cancel_run(run_id, repo, common).await,
         Command::Replay {
             path,
             realtime,
@@ -719,6 +759,33 @@ async fn inspect_run(
         );
         return Ok(conclusion.exit_code() as u32);
     }
+    Ok(0)
+}
+
+async fn rerun_run(
+    run_id: u64,
+    failed_only: bool,
+    repo_arg: Option<String>,
+    common: CommonArgs,
+) -> anyhow::Result<u32> {
+    let config = config::Config::load()?;
+    let repo = repo::resolve(repo_arg.as_deref())?;
+    let provider = build_provider(repo, &common, &config)?;
+    provider.rerun(run_id, failed_only).await?;
+    println!("doneyet: rerun queued for run {run_id}");
+    Ok(0)
+}
+
+async fn cancel_run(
+    run_id: u64,
+    repo_arg: Option<String>,
+    common: CommonArgs,
+) -> anyhow::Result<u32> {
+    let config = config::Config::load()?;
+    let repo = repo::resolve(repo_arg.as_deref())?;
+    let provider = build_provider(repo, &common, &config)?;
+    provider.cancel(run_id).await?;
+    println!("doneyet: cancel requested for run {run_id}");
     Ok(0)
 }
 

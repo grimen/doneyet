@@ -135,6 +135,8 @@ fn known_subcommands_are_untouched() {
         "watch",
         "runs",
         "run",
+        "rerun",
+        "cancel",
         "dash",
         "completions",
         "help",

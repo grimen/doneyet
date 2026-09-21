@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use doneyet_core::model::{Annotation, Job, RepoRef, RunsPage, RunsQuery, WorkflowRun};
-use doneyet_core::ports::{AnnotationSource, LogSource, ProviderError, RunSource};
+use doneyet_core::ports::{AnnotationSource, LogSource, ProviderError, RunSource, RunWriteSource};
 use reqwest::header::{ACCEPT, AUTHORIZATION, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH};
 use reqwest::{Client, StatusCode, Url};
 
@@ -263,6 +263,66 @@ impl GithubProvider {
         }
     }
 
+    async fn post(&self, url: &str) -> Result<(), ProviderError> {
+        let mut attempt = 0u32;
+        loop {
+            let response = match self.http.post(url).send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    let Some(delay) = self.retry_delay(&mut attempt) else {
+                        return Err(ProviderError::Transport(error.to_string()));
+                    };
+                    tracing::warn!(url, attempt, error = %error, "transport error; retrying github request");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            };
+            let status = response.status();
+            if status.is_success() {
+                return Ok(());
+            }
+            match status {
+                StatusCode::UNAUTHORIZED => return Err(ProviderError::Auth),
+                StatusCode::NOT_FOUND => {
+                    return Err(ProviderError::NotFound(error_message(response).await));
+                }
+                StatusCode::TOO_MANY_REQUESTS | StatusCode::FORBIDDEN => {
+                    let headers = response.headers().clone();
+                    let remaining = header_str(&headers, "x-ratelimit-remaining");
+                    let retry_after = header_str(&headers, "retry-after");
+                    let reset = header_str(&headers, "x-ratelimit-reset");
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        return Err(ProviderError::RateLimited {
+                            retry_after: retry_after_hint(retry_after, reset, now_secs()),
+                        });
+                    }
+                    let message = error_message(response).await;
+                    return Err(map_forbidden(
+                        is_rate_limited(remaining),
+                        retry_after,
+                        reset,
+                        now_secs(),
+                        message,
+                    ));
+                }
+                s if s.is_server_error() => {
+                    let Some(delay) = self.retry_delay(&mut attempt) else {
+                        return Err(ProviderError::Other(format!(
+                            "{url}: upstream returned {s}"
+                        )));
+                    };
+                    tracing::warn!(url, status = %s, attempt, "retrying github request");
+                    tokio::time::sleep(delay).await;
+                }
+                s => {
+                    return Err(ProviderError::Other(format!(
+                        "{url}: unexpected status {s}"
+                    )));
+                }
+            }
+        }
+    }
+
     fn retry_delay(&self, attempt: &mut u32) -> Option<Duration> {
         if !self.retry.should_retry(*attempt) {
             return None;
@@ -337,6 +397,30 @@ impl RunSource for GithubProvider {
         let url = format!("{}/repos/{}/pulls/{number}", self.base, self.repo);
         let pull: RawPull = self.get_json(&url).await?;
         Ok(pull.head.sha)
+    }
+}
+
+#[async_trait::async_trait]
+impl RunWriteSource for GithubProvider {
+    async fn rerun(&self, run_id: u64, failed_only: bool) -> Result<(), ProviderError> {
+        let action = if failed_only {
+            "rerun-failed-jobs"
+        } else {
+            "rerun"
+        };
+        let url = format!(
+            "{}/repos/{}/actions/runs/{run_id}/{action}",
+            self.base, self.repo
+        );
+        self.post(&url).await
+    }
+
+    async fn cancel(&self, run_id: u64) -> Result<(), ProviderError> {
+        let url = format!(
+            "{}/repos/{}/actions/runs/{run_id}/cancel",
+            self.base, self.repo
+        );
+        self.post(&url).await
     }
 }
 

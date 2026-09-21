@@ -875,6 +875,114 @@ async fn watch_commit_follows_all_workflows_and_exits_worst() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rerun_requests_rerun_and_exits_zero() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/api/actions/runs/2841/rerun"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "rerun",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("doneyet: rerun queued for run 2841"),
+        "{stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_failed_only_hits_failed_jobs_endpoint() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/api/actions/runs/2841/rerun-failed-jobs"))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "rerun",
+            "2841",
+            "--failed-only",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("doneyet: rerun queued for run 2841"),
+        "{stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_requests_cancel_and_exits_zero() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/api/actions/runs/2841/cancel"))
+        .respond_with(ResponseTemplate::new(202))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "cancel",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("doneyet: cancel requested for run 2841"),
+        "{stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rerun_api_error_exits_four() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/acme/api/actions/runs/2841/rerun"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "rerun",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn watch_pr_resolves_head_sha_and_follows_runs() {
     let finished = runs_page_json(&[run_json(2841, "completed", Some("success"))]);
     let server = MockServer::start().await;
