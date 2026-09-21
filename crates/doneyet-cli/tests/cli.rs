@@ -1,0 +1,512 @@
+use std::time::Duration;
+
+use assert_cmd::Command;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn doneyet() -> Command {
+    Command::cargo_bin("doneyet").expect("binary")
+}
+
+const ACTIVE_RUN_PAGE: &str = r#"{"total_count":1,"workflow_runs":[{"id":2841,"run_number":2841,"name":"ci.yml","display_title":"build & test","head_branch":"main","head_sha":"abc","event":"push","status":"in_progress","conclusion":null,"actor":{"login":"jonas"},"html_url":"https://github.com/acme/api/actions/runs/2841","created_at":"2026-09-21T10:00:00Z","run_started_at":"2026-09-21T10:00:01Z","updated_at":"2026-09-21T10:00:30Z"}]}"#;
+
+const COMPLETED_RUN_PAGE: &str = r#"{"total_count":1,"workflow_runs":[{"id":2841,"run_number":2841,"name":"ci.yml","display_title":"build & test","head_branch":"main","head_sha":"abc","event":"push","status":"completed","conclusion":"success","actor":{"login":"jonas"},"html_url":"https://github.com/acme/api/actions/runs/2841","created_at":"2026-09-21T10:00:00Z","run_started_at":"2026-09-21T10:00:01Z","updated_at":"2026-09-21T10:03:00Z"}]}"#;
+
+const EMPTY_JOBS: &str = r#"{"total_count":0,"jobs":[]}"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runs_command_lists_runs_and_exits_zero() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::RUNS_PAGE),
+        )
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args(["runs", "acme/api", "--api-base", &server.uri()])
+        .output()
+        .expect("run binary");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#2842"), "{stdout}");
+    assert!(stdout.contains("#2841"), "{stdout}");
+    assert!(stdout.contains("feat/retries"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_command_exits_zero_on_success_conclusion() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::RUN))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::JOBS))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "run",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#2841"), "{stdout}");
+    assert!(stdout.contains("success"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_command_exits_one_on_failure_conclusion() {
+    let failed_run = doneyet_contract::fixtures::RUN.replace("success", "failure");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(failed_run))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "run",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_command_follows_run_until_terminal() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(COMPLETED_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("in_progress"), "{stdout}");
+    assert!(stdout.contains("success"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_with_webhook_accepts_push_and_completes() {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(COMPLETED_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+
+    let webhook_port = 39471u16;
+    let bin = env!("CARGO_BIN_EXE_doneyet");
+    let child = std::process::Command::new(bin)
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "30",
+            "--webhook",
+            &format!("127.0.0.1:{webhook_port}"),
+            "--webhook-secret",
+            "e2e-secret",
+            "--api-base",
+            &server.uri(),
+        ])
+        .env("NO_COLOR", "1")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn doneyet");
+
+    let body = r#"{"action":"in_progress","workflow_run":{"id":2841},"repository":{"full_name":"acme/api"}}"#;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(b"e2e-secret").unwrap();
+    mac.update(body.as_bytes());
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+
+    let mut delivered = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{webhook_port}/"))
+            .header("x-github-event", "workflow_run")
+            .header("x-hub-signature-256", &signature)
+            .body(body)
+            .send()
+            .await;
+        if let Ok(response) = response {
+            assert_eq!(response.status(), 200);
+            delivered = true;
+            break;
+        }
+    }
+    assert!(delivered, "webhook server never came up");
+
+    let output = child.wait_with_output().expect("wait for doneyet");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("in_progress"), "{stdout}");
+    assert!(stdout.contains("success"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_with_record_writes_jsonl() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(COMPLETED_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+
+    let record_path =
+        std::env::temp_dir().join(format!("doneyet-e2e-record-{}.jsonl", std::process::id()));
+    let record_arg = record_path.to_string_lossy().to_string();
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--record",
+            &record_arg,
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let recorded = std::fs::read_to_string(&record_path).expect("recording file exists");
+    std::fs::remove_file(&record_path).ok();
+    let renders = recorded.matches("\"kind\":\"render\"").count();
+    let finishes = recorded.matches("\"kind\":\"finish\"").count();
+    assert!(renders >= 2, "expected >= 2 render records: {recorded}");
+    assert_eq!(
+        finishes, 1,
+        "expected exactly one finish record: {recorded}"
+    );
+    assert!(recorded.contains("\"v\":1"), "{recorded}");
+    assert!(
+        recorded.contains("\"phase\":\"InProgress\""),
+        "domain must roundtrip: {recorded}"
+    );
+}
+
+async fn mount_flip_mocks(server: &MockServer, final_page: String) {
+    use std::sync::Arc;
+    let final_page = Arc::new(final_page);
+    let final_page2 = final_page.clone();
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(final_page2.as_str().to_string()))
+        .expect(1..)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(server)
+        .await;
+    let _ = final_page;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replay_success_recording_renders_and_exits_zero() {
+    let server = MockServer::start().await;
+    mount_flip_mocks(&server, COMPLETED_RUN_PAGE.to_string()).await;
+    let record_path =
+        std::env::temp_dir().join(format!("doneyet-replay-ok-{}.jsonl", std::process::id()));
+    let record_arg = record_path.to_string_lossy().to_string();
+    let watch = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--record",
+            &record_arg,
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("record a watch");
+    assert_eq!(watch.status.code(), Some(0), "{watch:?}");
+    assert!(record_path.exists(), "recording file must exist");
+
+    let replay = doneyet()
+        .args(["replay", &record_arg, "--no-color"])
+        .output()
+        .expect("replay the recording");
+    std::fs::remove_file(&record_path).ok();
+    assert_eq!(replay.status.code(), Some(0), "{replay:?}");
+    let stdout = String::from_utf8_lossy(&replay.stdout);
+    assert!(stdout.contains("in_progress"), "{stdout}");
+    assert!(stdout.contains("success"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replay_failure_recording_exits_one() {
+    let server = MockServer::start().await;
+    mount_flip_mocks(&server, COMPLETED_RUN_PAGE.replace("success", "failure")).await;
+    let record_path =
+        std::env::temp_dir().join(format!("doneyet-replay-fail-{}.jsonl", std::process::id()));
+    let record_arg = record_path.to_string_lossy().to_string();
+    let watch = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--record",
+            &record_arg,
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("record a failing watch");
+    assert_eq!(watch.status.code(), Some(1), "{watch:?}");
+
+    let replay = doneyet()
+        .args(["replay", &record_arg, "--no-color"])
+        .output()
+        .expect("replay the failure");
+    std::fs::remove_file(&record_path).ok();
+    assert_eq!(replay.status.code(), Some(1), "{replay:?}");
+    let stdout = String::from_utf8_lossy(&replay.stdout);
+    assert!(stdout.contains("failure"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replay_malformed_file_errors_with_exit_four() {
+    let path =
+        std::env::temp_dir().join(format!("doneyet-replay-bad-{}.jsonl", std::process::id()));
+    std::fs::write(&path, "definitely not jsonl\n").expect("write bad recording");
+    let output = doneyet()
+        .args(["replay", &path.to_string_lossy(), "--no-color"])
+        .output()
+        .expect("run replay");
+    std::fs::remove_file(&path).ok();
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bad_token_reports_auth_error_with_exit_four() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_string(r#"{"message": "Bad credentials"}"#),
+        )
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .env("DONEYET_TOKEN", "definitely-broken")
+        .args(["runs", "acme/api", "--api-base", &server.uri()])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+}
+
+const FAILED_RUN_JOBS: &str = r#"{"total_count":1,"jobs":[{"id":399444496,"run_id":2841,"status":"completed","conclusion":"failure","name":"test (macos-latest)","started_at":"2026-09-21T10:00:02Z","completed_at":"2026-09-21T10:01:04Z","runner_name":null,"labels":["macos-latest"],"steps":[{"name":"Run cargo test","number":2,"status":"completed","conclusion":"failure","started_at":"2026-09-21T10:00:06Z","completed_at":"2026-09-21T10:00:20Z"}]}]}"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_shows_annotations_and_log_tail_for_failures() {
+    let server = MockServer::start().await;
+    let failed_run = doneyet_contract::fixtures::RUN.replace("success", "failure");
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(failed_run))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FAILED_RUN_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/check-runs/399444496/annotations"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::ANNOTATIONS),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let log_body = "2026-09-21T10:00:06Z cargo test\n2026-09-21T10:00:19Z thread panicked\n2026-09-21T10:00:20Z error: test failed\n";
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/jobs/399444496/logs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(log_body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let output = doneyet()
+        .args([
+            "run",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--logs-failed",
+            "2",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("src/lib.rs:42"),
+        "annotation inline: {stdout}"
+    );
+    assert!(
+        stdout.contains("unused variable"),
+        "annotation message: {stdout}"
+    );
+    assert!(
+        stdout.contains("logs: test (macos-latest)"),
+        "log header: {stdout}"
+    );
+    assert!(
+        stdout.contains("error: test failed"),
+        "log tail shown: {stdout}"
+    );
+    assert!(
+        !stdout.contains("cargo test\n2026"),
+        "only the requested tail is printed: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_without_logs_flag_shows_annotations_but_no_logs() {
+    let server = MockServer::start().await;
+    let failed_run = doneyet_contract::fixtures::RUN.replace("success", "failure");
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(failed_run))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(FAILED_RUN_JOBS))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/check-runs/399444496/annotations"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::ANNOTATIONS),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "run",
+            "2841",
+            "--repo",
+            "acme/api",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("src/lib.rs:42"), "{stdout}");
+    assert!(
+        !stdout.contains("── logs:"),
+        "no log section without the flag: {stdout}"
+    );
+}

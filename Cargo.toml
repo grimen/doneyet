@@ -11,10 +11,11 @@ publish = false
 
 [workspace.dependencies]
 doneyet-app = { path = "crates/doneyet-app" }
-doneyet-ux = { path = "crates/doneyet-ux" }
-doneyet-github = { path = "crates/doneyet-github" }
+doneyet-cli = { path = "crates/doneyet-cli" }
 doneyet-contract = { path = "crates/doneyet-contract" }
 doneyet-core = { path = "crates/doneyet-core" }
+doneyet-github = { path = "crates/doneyet-github" }
+doneyet-ux = { path = "crates/doneyet-ux" }
 anyhow = "1"
 anstyle = "1"
 anstream = "0.6"
