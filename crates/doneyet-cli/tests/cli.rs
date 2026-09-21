@@ -671,3 +671,45 @@ async fn watch_commit_follows_all_workflows_and_exits_worst() {
     assert!(stdout.contains("#2842"), "{stdout}");
     assert!(stdout.contains("failure"), "{stdout}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_pr_resolves_head_sha_and_follows_runs() {
+    let finished = runs_page_json(&[run_json(2841, "completed", Some("success"))]);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/pulls/7"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(r#"{"number":7,"head":{"sha":"deadbeef"}}"#),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .and(wiremock::matchers::query_param("head_sha", "deadbeef"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(finished))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--pr",
+            "7",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#2841"), "{stdout}");
+    assert!(
+        stdout.contains("all runs for deadbeef finished"),
+        "{stdout}"
+    );
+}

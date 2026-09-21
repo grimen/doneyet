@@ -6,7 +6,7 @@ use doneyet_core::ports::{AnnotationSource, LogSource, ProviderError, RunSource}
 use reqwest::header::{ACCEPT, AUTHORIZATION, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH};
 use reqwest::{Client, StatusCode, Url};
 
-use crate::dto::{RawAnnotation, RawJob, RawJobsPage, RawRun, RawRunsPage};
+use crate::dto::{RawAnnotation, RawJob, RawJobsPage, RawPull, RawRun, RawRunsPage};
 use crate::etag::EtagCache;
 use crate::retry::RetryPolicy;
 use crate::status::{error_message, is_rate_limited, map_forbidden, retry_after_hint};
@@ -240,6 +240,11 @@ impl RunSource for GithubProvider {
             next = link_next(fetched.link.as_deref());
         }
         Ok(jobs)
+    }
+    async fn pr_head_sha(&self, number: u64) -> Result<String, ProviderError> {
+        let url = format!("{}/repos/{}/pulls/{number}", self.base, self.repo);
+        let pull: RawPull = self.get_json(&url).await?;
+        Ok(pull.head.sha)
     }
 }
 

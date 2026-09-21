@@ -23,6 +23,7 @@ pub trait RunSource: Send + Sync {
     async fn list_runs(&self, query: &RunsQuery) -> Result<RunsPage, ProviderError>;
     async fn get_run(&self, run_id: u64) -> Result<WorkflowRun, ProviderError>;
     async fn list_jobs(&self, run_id: u64) -> Result<Vec<Job>, ProviderError>;
+    async fn pr_head_sha(&self, number: u64) -> Result<String, ProviderError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

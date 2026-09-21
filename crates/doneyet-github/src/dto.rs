@@ -130,6 +130,20 @@ impl RawJob {
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct RawPullHead {
+    #[serde(default)]
+    pub sha: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RawPull {
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub head: RawPullHead,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RawJobsPage {
     #[serde(default)]

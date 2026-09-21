@@ -38,6 +38,12 @@ pub enum Command {
         commit: Option<String>,
         #[arg(
             long,
+            conflicts_with_all = ["commit", "branch", "run_id"],
+            help = "Watch every run of pull request N"
+        )]
+        pr: Option<u64>,
+        #[arg(
+            long,
             conflicts_with_all = ["commit", "branch"],
             help = "Watch the run with this id instead of the latest matching run"
         )]
@@ -204,6 +210,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             repo,
             branch,
             commit,
+            pr,
             run_id,
             interval,
             webhook,
@@ -219,6 +226,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     repo,
                     branch,
                     commit,
+                    pr,
                     run_id,
                     interval,
                     webhook,
@@ -340,6 +348,7 @@ struct WatchOptions {
     repo: Option<String>,
     branch: Option<String>,
     commit: Option<String>,
+    pr: Option<u64>,
     run_id: Option<u64>,
     interval: u64,
     webhook: Option<String>,
@@ -397,7 +406,12 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         log_tail: opts.logs,
         log_grep: opts.grep,
     };
-    let outcome = if let Some(sha) = opts.commit.clone() {
+    let commit_sha = match (opts.commit.clone(), opts.pr) {
+        (Some(sha), _) => Some(sha),
+        (None, Some(number)) => Some(provider.pr_head_sha(number).await?),
+        (None, None) => None,
+    };
+    let outcome = if let Some(sha) = commit_sha {
         let mut view = BoardView {
             redraw: doneyet_ux::InlineRedraw::new(stdout),
             theme: resolve_theme(&common)?,

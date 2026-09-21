@@ -5,3 +5,4 @@ pub const EMPTY_RUNS: &str = include_str!("../fixtures/empty_runs.json");
 pub const RUN: &str = include_str!("../fixtures/run.json");
 pub const JOBS: &str = include_str!("../fixtures/jobs.json");
 pub const ANNOTATIONS: &str = include_str!("../fixtures/annotations.json");
+pub const PR: &str = include_str!("../fixtures/pr.json");

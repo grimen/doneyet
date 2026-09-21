@@ -20,6 +20,7 @@ pub async fn run_suite<F: ProviderFactory>(factory: &F) {
     list_runs_applies_query_filters(factory).await;
     list_runs_follows_link_pagination(factory).await;
     get_run_maps_single_run(factory).await;
+    pr_head_sha_maps_head_sha(factory).await;
     list_jobs_maps_jobs_and_steps(factory).await;
     list_annotations_maps_fields(factory).await;
     job_logs_returns_bytes(factory).await;
@@ -157,6 +158,19 @@ async fn get_run_maps_single_run<F: ProviderFactory>(factory: &F) {
     assert_eq!(run.phase, Phase::Done(Conclusion::Success));
     assert_eq!(run.actor, "jonas");
     assert!(run.run_started_at.is_some());
+    server.verify().await;
+}
+
+async fn pr_head_sha_maps_head_sha<F: ProviderFactory>(factory: &F) {
+    let (server, provider) = setup(factory).await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/pulls/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(fixtures::PR))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let sha = provider.pr_head_sha(7).await.expect("pr_head_sha succeeds");
+    assert_eq!(sha, "deadbeef");
     server.verify().await;
 }
 

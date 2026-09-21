@@ -119,11 +119,11 @@ doneyet replay run.jsonl --realtime    # at the recorded wall-clock pace
 
 Milestone 6 complete — all planned MVP milestones shipped:
 
-- `doneyet watch [OWNER/NAME] [-b branch] [--commit SHA] [--interval N]` —
+- `doneyet watch [OWNER/NAME] [-b branch] [--commit SHA] [--pr N] [--run-id N] [--interval N]` —
   live inline redraw of the latest run; exits with the run's conclusion.
   With `--commit SHA` every workflow run for that commit is followed as a
-  live table; the exit code is the worst conclusion (failure beats
-  cancelled/timeout beats success)
+  live table; `--pr N` resolves the PR head SHA and does the same. The exit
+  code is the worst conclusion (failure beats cancelled/timeout beats success)
   While a run is in progress the header shows an ETA
   (`3m12s (~1m28s left)`) derived from the median duration of recent
   runs of the same workflow. `--logs` tails the last N lines of
