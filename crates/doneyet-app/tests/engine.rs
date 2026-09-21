@@ -16,6 +16,7 @@ fn config() -> WatchConfig {
         idle_interval: Duration::from_secs(20),
         log_tail: None,
         log_grep: None,
+        timeout: None,
     }
 }
 
@@ -517,6 +518,7 @@ fn dash_query() -> RunsQuery {
 fn dash_config() -> doneyet_app::DashConfig {
     doneyet_app::DashConfig {
         interval: Duration::from_secs(3),
+        timeout: None,
     }
 }
 
@@ -899,4 +901,129 @@ async fn cancel_interrupts_rate_limit_backoff() {
         .await
         .expect("cancelled watch is not an error");
     assert!(matches!(outcome, WatchOutcome::Interrupted));
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_times_out_when_run_never_terminates() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+    ]);
+    let started = tokio::time::Instant::now();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(RecordingRenderer::default()),
+        Box::new(NoopPushSource),
+        WatchConfig {
+            timeout: Some(Duration::from_secs(2)),
+            ..config()
+        },
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("timing out is not an error");
+    assert!(matches!(outcome, WatchOutcome::TimedOut));
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "must not return before the deadline, elapsed {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_completes_before_timeout() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        WatchConfig {
+            timeout: Some(Duration::from_secs(3600)),
+            ..config()
+        },
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("watch succeeds before the timeout");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+    assert_eq!(renderer.frames().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn dash_times_out_when_runs_never_finish() {
+    use doneyet_app::{DashEngine, DashOutcome};
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+    ]);
+    let started = tokio::time::Instant::now();
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        cancel: shutdown.clone(),
+        stop_after: usize::MAX,
+    };
+    let mut engine = DashEngine::new(
+        Box::new(provider),
+        Box::new(NoopPushSource),
+        doneyet_app::DashConfig {
+            timeout: Some(Duration::from_secs(2)),
+            ..dash_config()
+        },
+        shutdown,
+    );
+    let outcome = engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect("timing out is not an error");
+    assert!(matches!(outcome, DashOutcome::TimedOut));
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "must not return before the deadline, elapsed {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dash_completes_before_timeout() {
+    use doneyet_app::{DashEngine, DashOutcome};
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        cancel: shutdown.clone(),
+        stop_after: 2,
+    };
+    let mut engine = DashEngine::new(
+        Box::new(provider),
+        Box::new(NoopPushSource),
+        doneyet_app::DashConfig {
+            timeout: Some(Duration::from_secs(3600)),
+            ..dash_config()
+        },
+        shutdown,
+    );
+    let outcome = engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect("cancel is not an error");
+    assert!(matches!(outcome, DashOutcome::Interrupted));
 }

@@ -147,7 +147,7 @@ the latest run) and cannot be combined with `--record`.
 
 Milestone 6 complete — all planned MVP milestones shipped:
 
-- `doneyet watch [OWNER/NAME] [-b branch] [--commit SHA] [--pr N] [--run-id N] [--interval N] [--format term|json]` —
+- `doneyet watch [OWNER/NAME] [-b branch] [--commit SHA] [--pr N] [--run-id N] [--interval N] [--timeout N] [--format term|json]` —
   live inline redraw of the latest run; exits with the run's conclusion.
   With `--commit SHA` every workflow run for that commit is followed as a
   live table; `--pr N` resolves the PR head SHA and does the same. The exit
@@ -159,7 +159,7 @@ Milestone 6 complete — all planned MVP milestones shipped:
   stop the watch. `--grep PATTERN` filters tailed lines to those
   containing the substring. `--notify` fires a desktop notification
   (`notify-send`) when the run finishes
-- `doneyet dash [OWNER/NAME] [--limit N] [--interval N]` — live recent-runs
+- `doneyet dash [OWNER/NAME] [--limit N] [--interval N] [--timeout N]` — live recent-runs
   table until quit (`q` / `Esc` / `Ctrl-C`, exit `130`)
 - `doneyet runs [OWNER/NAME] [--limit N]` — colorful recent-runs table
 - `doneyet run <ID> [--repo OWNER/NAME]` — static single-run view + exit code

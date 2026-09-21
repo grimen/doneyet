@@ -62,6 +62,11 @@ pub enum Command {
         interval: Option<u64>,
         #[arg(
             long,
+            help = "Give up after N seconds and exit 2 (default: watch until done)"
+        )]
+        timeout: Option<u64>,
+        #[arg(
+            long,
             requires = "webhook_secret",
             help = "Listen for GitHub webhook pushes on ADDR (e.g. 127.0.0.1:4567)"
         )]
@@ -117,6 +122,11 @@ pub enum Command {
             help = "Poll interval in seconds (defaults to the configured value or 5)"
         )]
         interval: Option<u64>,
+        #[arg(
+            long,
+            help = "Give up after N seconds and exit 2 (default: run until quit)"
+        )]
+        timeout: Option<u64>,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -239,6 +249,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             pr,
             run_id,
             interval,
+            timeout,
             webhook,
             webhook_secret,
             record,
@@ -256,6 +267,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     pr,
                     run_id,
                     interval,
+                    timeout,
                     webhook,
                     webhook_secret,
                     record,
@@ -274,8 +286,9 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             branch,
             event,
             interval,
+            timeout,
             common,
-        } => dash(repo, limit, branch, event, interval, common).await,
+        } => dash(repo, limit, branch, event, interval, timeout, common).await,
         Command::Runs {
             repo,
             limit,
@@ -384,6 +397,7 @@ struct WatchOptions {
     pr: Option<u64>,
     run_id: Option<u64>,
     interval: Option<u64>,
+    timeout: Option<u64>,
     webhook: Option<String>,
     webhook_secret: Option<String>,
     record: Option<String>,
@@ -399,6 +413,9 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         anyhow::bail!(
             "--format json is only available for run watching (--run-id or the latest run)"
         );
+    }
+    if opts.timeout.is_some() && (opts.commit.is_some() || opts.pr.is_some()) {
+        anyhow::bail!("--timeout is only available for run watching (--run-id or the latest run)");
     }
     if json && opts.record.is_some() {
         anyhow::bail!("--format json cannot be combined with --record");
@@ -455,6 +472,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         idle_interval: Duration::from_secs(20),
         log_tail: opts.logs,
         log_grep: opts.grep,
+        timeout: opts.timeout.map(Duration::from_secs),
     };
     let commit_sha = match (opts.commit.clone(), opts.pr) {
         (Some(sha), _) => Some(sha),
@@ -552,6 +570,7 @@ async fn dash(
     branch: Option<String>,
     event: Option<String>,
     interval: Option<u64>,
+    timeout: Option<u64>,
     common: CommonArgs,
 ) -> anyhow::Result<u32> {
     let config = config::Config::load()?;
@@ -595,6 +614,7 @@ async fn dash(
         Box::new(push),
         DashConfig {
             interval: Duration::from_secs(interval),
+            timeout: timeout.map(Duration::from_secs),
         },
         shutdown,
     );

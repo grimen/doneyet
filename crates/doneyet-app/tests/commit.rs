@@ -24,6 +24,7 @@ fn config() -> WatchConfig {
         idle_interval: Duration::from_secs(20),
         log_tail: None,
         log_grep: None,
+        timeout: None,
     }
 }
 

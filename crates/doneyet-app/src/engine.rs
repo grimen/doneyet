@@ -25,6 +25,7 @@ pub enum EngineError {
 pub enum WatchOutcome {
     Completed(Conclusion),
     Interrupted,
+    TimedOut,
 }
 
 impl WatchOutcome {
@@ -32,6 +33,7 @@ impl WatchOutcome {
         match self {
             WatchOutcome::Completed(conclusion) => conclusion.exit_code(),
             WatchOutcome::Interrupted => 130,
+            WatchOutcome::TimedOut => 2,
         }
     }
 }
@@ -42,6 +44,7 @@ pub struct WatchConfig {
     pub idle_interval: Duration,
     pub log_tail: Option<usize>,
     pub log_grep: Option<String>,
+    pub timeout: Option<Duration>,
 }
 
 impl Default for WatchConfig {
@@ -51,6 +54,7 @@ impl Default for WatchConfig {
             idle_interval: Duration::from_secs(20),
             log_tail: None,
             log_grep: None,
+            timeout: None,
         }
     }
 }
@@ -94,12 +98,14 @@ impl PushSource for ChannelPushSource {
 #[derive(Debug, Clone)]
 pub struct DashConfig {
     pub interval: Duration,
+    pub timeout: Option<Duration>,
 }
 
 impl Default for DashConfig {
     fn default() -> Self {
         Self {
             interval: Duration::from_secs(5),
+            timeout: None,
         }
     }
 }
@@ -107,12 +113,14 @@ impl Default for DashConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DashOutcome {
     Interrupted,
+    TimedOut,
 }
 
 impl DashOutcome {
     pub fn exit_code(&self) -> i32 {
         match self {
             DashOutcome::Interrupted => 130,
+            DashOutcome::TimedOut => 2,
         }
     }
 }
@@ -268,9 +276,13 @@ impl DashEngine {
         query: RunsQuery,
         sink: &mut dyn BoardSink,
     ) -> Result<DashOutcome, EngineError> {
+        let deadline = self.config.timeout.map(|t| tokio::time::Instant::now() + t);
         loop {
             if self.shutdown.is_cancelled() {
                 return Ok(DashOutcome::Interrupted);
+            }
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                return Ok(DashOutcome::TimedOut);
             }
             let page = match self.provider.list_runs(&query).await {
                 Ok(page) => page,
@@ -335,14 +347,19 @@ impl WatchEngine {
     }
 
     pub async fn watch(&mut self, target: WatchTarget) -> Result<WatchOutcome, EngineError> {
+        let deadline = self.config.timeout.map(|t| tokio::time::Instant::now() + t);
         let mut previous: Option<World> = None;
         loop {
             if self.shutdown.is_cancelled() {
                 return Ok(WatchOutcome::Interrupted);
             }
+            if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+                return Ok(WatchOutcome::TimedOut);
+            }
             let run_opt = match self.locate_run(&target).await {
                 Ok(None) => {
-                    if let Some(outcome) = self.wait_tick(self.config.idle_interval).await {
+                    if let Some(outcome) = self.wait_tick(self.config.idle_interval, deadline).await
+                    {
                         return Ok(outcome);
                     }
                     None
@@ -351,7 +368,7 @@ impl WatchEngine {
                 Err(ProviderError::RateLimited { retry_after }) => {
                     tracing::warn!("rate limited; backing off {:?}", retry_after);
                     let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
-                    if let Some(outcome) = self.wait_tick(backoff).await {
+                    if let Some(outcome) = self.wait_tick(backoff, deadline).await {
                         return Ok(outcome);
                     }
                     continue;
@@ -366,7 +383,7 @@ impl WatchEngine {
                 Err(ProviderError::RateLimited { retry_after }) => {
                     tracing::warn!("rate limited; backing off {:?}", retry_after);
                     let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
-                    if let Some(outcome) = self.wait_tick(backoff).await {
+                    if let Some(outcome) = self.wait_tick(backoff, deadline).await {
                         return Ok(outcome);
                     }
                     continue;
@@ -390,7 +407,7 @@ impl WatchEngine {
                             );
                             let backoff =
                                 rate_limit_backoff(retry_after, self.config.active_interval);
-                            if let Some(outcome) = self.wait_tick(backoff).await {
+                            if let Some(outcome) = self.wait_tick(backoff, deadline).await {
                                 return Ok(outcome);
                             }
                             continue;
@@ -426,14 +443,22 @@ impl WatchEngine {
                 self.renderer.finish(&outcome)?;
                 return Ok(WatchOutcome::Completed(conclusion));
             }
-            if let Some(outcome) = self.wait_tick(self.config.active_interval).await {
+            if let Some(outcome) = self.wait_tick(self.config.active_interval, deadline).await {
                 return Ok(outcome);
             }
         }
     }
-    async fn wait_tick(&mut self, interval: Duration) -> Option<WatchOutcome> {
+    async fn wait_tick(
+        &mut self,
+        interval: Duration,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Option<WatchOutcome> {
+        let until = match deadline {
+            Some(deadline) => std::cmp::min(tokio::time::Instant::now() + interval, deadline),
+            None => tokio::time::Instant::now() + interval,
+        };
         tokio::select! {
-            _ = tokio::time::sleep(interval) => {}
+            _ = tokio::time::sleep_until(until) => {}
             hint = self.push.wait(), if !self.push_dead => {
                 match hint {
                     Ok(_) => {}
@@ -444,6 +469,9 @@ impl WatchEngine {
                 }
             }
             _ = self.shutdown.cancelled() => return Some(WatchOutcome::Interrupted),
+        }
+        if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            return Some(WatchOutcome::TimedOut);
         }
         None
     }

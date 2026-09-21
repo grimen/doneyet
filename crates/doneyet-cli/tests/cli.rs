@@ -224,6 +224,87 @@ async fn watch_format_json_rejects_commit_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn watch_timeout_rejects_commit_mode() {
+    let output = doneyet()
+        .args(["watch", "acme/api", "--commit", "abc", "--timeout", "10"])
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("timeout"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_timeout_exits_two_when_run_never_finishes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let started = std::time::Instant::now();
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--timeout",
+            "1",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    let elapsed = started.elapsed();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "timeout must exit promptly, took {elapsed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dash_timeout_exits_two_when_runs_never_finish() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let started = std::time::Instant::now();
+    let output = doneyet()
+        .args([
+            "dash",
+            "acme/api",
+            "--timeout",
+            "1",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    let elapsed = started.elapsed();
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "timeout must exit promptly, took {elapsed:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn watch_with_webhook_accepts_push_and_completes() {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
