@@ -159,6 +159,9 @@ Milestone 6 complete — all planned MVP milestones shipped:
   stop the watch. `--grep PATTERN` filters tailed lines to those
   containing the substring. `--notify` fires a desktop notification
   (`notify-send`) when the run finishes
+- transient network/transport errors and 5xx/429 API failures are retried
+  with backoff; `watch` (and `dash`/`--commit` modes) survives them instead
+  of aborting
 - `doneyet dash [OWNER/NAME] [--limit N] [--interval N] [--timeout N]` — live recent-runs
   table until quit (`q` / `Esc` / `Ctrl-C`, exit `130`)
 - `doneyet runs [OWNER/NAME] [--limit N]` — colorful recent-runs table

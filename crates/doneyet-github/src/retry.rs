@@ -4,6 +4,7 @@ use std::time::Duration;
 pub struct RetryPolicy {
     pub max_retries: u32,
     pub base_delay: Duration,
+    pub max_delay: Duration,
 }
 
 impl Default for RetryPolicy {
@@ -11,6 +12,7 @@ impl Default for RetryPolicy {
         Self {
             max_retries: 2,
             base_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(5),
         }
     }
 }
@@ -21,7 +23,7 @@ impl RetryPolicy {
     }
 
     pub fn delay_for(&self, attempt: u32) -> Duration {
-        self.base_delay * attempt.max(1)
+        (self.base_delay * attempt.max(1)).min(self.max_delay)
     }
 }
 
@@ -59,5 +61,17 @@ mod tests {
         assert_eq!(policy.delay_for(1), Duration::from_millis(100));
         assert_eq!(policy.delay_for(2), Duration::from_millis(200));
         assert_eq!(policy.delay_for(3), Duration::from_millis(300));
+    }
+
+    #[test]
+    fn delay_for_attempt_is_capped_at_max_delay() {
+        let policy = RetryPolicy {
+            base_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(5),
+            ..RetryPolicy::default()
+        };
+        assert_eq!(policy.delay_for(1), Duration::from_secs(1));
+        assert_eq!(policy.delay_for(5), Duration::from_secs(5));
+        assert_eq!(policy.delay_for(10), Duration::from_secs(5));
     }
 }

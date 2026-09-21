@@ -648,6 +648,43 @@ async fn dash_provider_error_aborts() {
     assert!(sink.pages.lock().expect("pages poisoned").is_empty());
 }
 
+#[tokio::test(start_paused = true)]
+async fn dash_survives_transport_error_then_sees_run() {
+    use doneyet_app::{DashEngine, DashOutcome};
+
+    let provider = FakeProvider::new(vec![
+        Step0::Transport("connection reset".to_string()),
+        Step0::World(active_world()),
+    ]);
+    let pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: pages.clone(),
+        cancel: shutdown.clone(),
+        stop_after: usize::MAX,
+    };
+    let mut engine = DashEngine::new(
+        Box::new(provider),
+        Box::new(NoopPushSource),
+        doneyet_app::DashConfig {
+            timeout: Some(Duration::from_secs(10)),
+            ..dash_config()
+        },
+        shutdown,
+    );
+    let outcome = engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect("a transport error must not kill the board");
+    assert!(matches!(outcome, DashOutcome::TimedOut));
+    let rendered = pages.lock().expect("pages poisoned");
+    assert!(
+        !rendered.is_empty(),
+        "the active run page must render after the transport error"
+    );
+    assert_eq!(rendered[0].runs[0].id, 2841);
+}
+
 fn logs_config(tail: usize) -> WatchConfig {
     WatchConfig {
         log_tail: Some(tail),
@@ -901,6 +938,37 @@ async fn cancel_interrupts_rate_limit_backoff() {
         .await
         .expect("cancelled watch is not an error");
     assert!(matches!(outcome, WatchOutcome::Interrupted));
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_survives_transport_error_then_completes() {
+    let provider = FakeProvider::new(vec![
+        Step0::Transport("connection reset".to_string()),
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        config(),
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("a transport error must not kill the watch");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+    assert_eq!(
+        renderer.frames().len(),
+        2,
+        "one frame per fetch after the transport error"
+    );
 }
 
 #[tokio::test(start_paused = true)]

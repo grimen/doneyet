@@ -163,3 +163,26 @@ async fn commit_watch_cancel_returns_interrupted() {
     assert_eq!(outcome.exit_code(), 130);
     assert_eq!(pages.lock().expect("pages poisoned").len(), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn commit_watch_survives_transport_error_then_completes() {
+    let provider = FakeProvider::new(vec![
+        Step0::Transport("connection reset".to_string()),
+        page(vec![run_with(2841, Phase::Done(Conclusion::Success))]),
+    ]);
+    let (_, mut sink, shutdown) = sink(1);
+    let mut engine = CommitWatchEngine::new(
+        Box::new(provider),
+        Box::new(NoopPushSource),
+        config(),
+        shutdown,
+    );
+    let outcome = engine
+        .run(query(), &mut sink)
+        .await
+        .expect("a transport error must not kill the watch");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Success)
+    ));
+}

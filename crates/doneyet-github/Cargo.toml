@@ -24,3 +24,4 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 doneyet-contract = { workspace = true }
+wiremock = { workspace = true }

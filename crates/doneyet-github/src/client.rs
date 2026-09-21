@@ -102,10 +102,17 @@ impl GithubProvider {
             if let Some((etag, _)) = &cached {
                 request = request.header(IF_NONE_MATCH, etag.as_str());
             }
-            let response = request
-                .send()
-                .await
-                .map_err(|e| ProviderError::Transport(e.to_string()))?;
+            let response = match request.send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    let Some(delay) = self.retry_delay(&mut attempt) else {
+                        return Err(ProviderError::Transport(error.to_string()));
+                    };
+                    tracing::warn!(url, attempt, error = %error, "transport error; retrying github request");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            };
             let status = response.status();
             if status.is_success() {
                 let headers = response.headers().clone();
@@ -117,10 +124,17 @@ impl GithubProvider {
                     .get("link")
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_string);
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| ProviderError::Transport(e.to_string()))?;
+                let body = match response.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        let Some(delay) = self.retry_delay(&mut attempt) else {
+                            return Err(ProviderError::Transport(error.to_string()));
+                        };
+                        tracing::warn!(url, attempt, error = %error, "transport error; retrying github request");
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                };
                 if let Some(etag) = etag {
                     self.etags
                         .lock()
@@ -161,14 +175,13 @@ impl GithubProvider {
                     ));
                 }
                 s if s.is_server_error() => {
-                    if !self.retry.should_retry(attempt) {
+                    let Some(delay) = self.retry_delay(&mut attempt) else {
                         return Err(ProviderError::Other(format!(
                             "{url}: upstream returned {s}"
                         )));
-                    }
-                    attempt += 1;
+                    };
                     tracing::warn!(url, status = %s, attempt, "retrying github request");
-                    tokio::time::sleep(self.retry.delay_for(attempt)).await;
+                    tokio::time::sleep(delay).await;
                 }
                 s => {
                     return Err(ProviderError::Other(format!(
@@ -177,6 +190,85 @@ impl GithubProvider {
                 }
             }
         }
+    }
+
+    async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, ProviderError> {
+        let mut attempt = 0u32;
+        loop {
+            let response = match self.http.get(url).send().await {
+                Ok(response) => response,
+                Err(error) => {
+                    let Some(delay) = self.retry_delay(&mut attempt) else {
+                        return Err(ProviderError::Transport(error.to_string()));
+                    };
+                    tracing::warn!(url, attempt, error = %error, "transport error; retrying github request");
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+            };
+            let status = response.status();
+            if status.is_success() {
+                let bytes = match response.bytes().await {
+                    Ok(bytes) => bytes.to_vec(),
+                    Err(error) => {
+                        let Some(delay) = self.retry_delay(&mut attempt) else {
+                            return Err(ProviderError::Transport(error.to_string()));
+                        };
+                        tracing::warn!(url, attempt, error = %error, "transport error; retrying github request");
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                };
+                return Ok(bytes);
+            }
+            match status {
+                StatusCode::UNAUTHORIZED => return Err(ProviderError::Auth),
+                StatusCode::NOT_FOUND => {
+                    return Err(ProviderError::NotFound(error_message(response).await));
+                }
+                StatusCode::TOO_MANY_REQUESTS | StatusCode::FORBIDDEN => {
+                    let headers = response.headers().clone();
+                    let remaining = header_str(&headers, "x-ratelimit-remaining");
+                    let retry_after = header_str(&headers, "retry-after");
+                    let reset = header_str(&headers, "x-ratelimit-reset");
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        return Err(ProviderError::RateLimited {
+                            retry_after: retry_after_hint(retry_after, reset, now_secs()),
+                        });
+                    }
+                    let message = error_message(response).await;
+                    return Err(map_forbidden(
+                        is_rate_limited(remaining),
+                        retry_after,
+                        reset,
+                        now_secs(),
+                        message,
+                    ));
+                }
+                s if s.is_server_error() => {
+                    let Some(delay) = self.retry_delay(&mut attempt) else {
+                        return Err(ProviderError::Other(format!(
+                            "{url}: upstream returned {s}"
+                        )));
+                    };
+                    tracing::warn!(url, status = %s, attempt, "retrying github request");
+                    tokio::time::sleep(delay).await;
+                }
+                s => {
+                    return Err(ProviderError::Other(format!(
+                        "{url}: unexpected status {s}"
+                    )));
+                }
+            }
+        }
+    }
+
+    fn retry_delay(&self, attempt: &mut u32) -> Option<Duration> {
+        if !self.retry.should_retry(*attempt) {
+            return None;
+        }
+        *attempt += 1;
+        Some(self.retry.delay_for(*attempt))
     }
 }
 
@@ -267,28 +359,7 @@ impl LogSource for GithubProvider {
             "{}/repos/{}/actions/jobs/{job_id}/logs",
             self.base, self.repo
         );
-        let response = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Transport(e.to_string()))?;
-        let response = response;
-        let status = response.status();
-        if status.is_success() {
-            let bytes = response
-                .bytes()
-                .await
-                .map_err(|e| ProviderError::Transport(e.to_string()))?;
-            return Ok(bytes.to_vec());
-        }
-        match status {
-            StatusCode::UNAUTHORIZED => Err(ProviderError::Auth),
-            StatusCode::NOT_FOUND => Err(ProviderError::NotFound(error_message(response).await)),
-            s => Err(ProviderError::Other(format!(
-                "{url}: unexpected status {s}"
-            ))),
-        }
+        self.fetch_bytes(&url).await
     }
 }
 

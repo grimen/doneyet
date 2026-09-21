@@ -220,6 +220,20 @@ impl CommitWatchEngine {
                     }
                     continue;
                 }
+                Err(ProviderError::Transport(message)) => {
+                    tracing::warn!("transport error ({message}); continuing with polling");
+                    if push_or_tick(
+                        &mut self.push,
+                        &mut self.push_dead,
+                        &self.shutdown,
+                        self.config.active_interval,
+                    )
+                    .await
+                    {
+                        return Ok(WatchOutcome::Interrupted);
+                    }
+                    continue;
+                }
                 Err(e) => return Err(e.into()),
             };
             sink.render_page(&page)?;
@@ -291,6 +305,20 @@ impl DashEngine {
                     let backoff = rate_limit_backoff(retry_after, self.config.interval);
                     if push_or_tick(&mut self.push, &mut self.push_dead, &self.shutdown, backoff)
                         .await
+                    {
+                        return Ok(DashOutcome::Interrupted);
+                    }
+                    continue;
+                }
+                Err(ProviderError::Transport(message)) => {
+                    tracing::warn!("transport error ({message}); continuing with polling");
+                    if push_or_tick(
+                        &mut self.push,
+                        &mut self.push_dead,
+                        &self.shutdown,
+                        self.config.interval,
+                    )
+                    .await
                     {
                         return Ok(DashOutcome::Interrupted);
                     }
@@ -373,6 +401,15 @@ impl WatchEngine {
                     }
                     continue;
                 }
+                Err(ProviderError::Transport(message)) => {
+                    tracing::warn!("transport error ({message}); continuing with polling");
+                    if let Some(outcome) =
+                        self.wait_tick(self.config.active_interval, deadline).await
+                    {
+                        return Ok(outcome);
+                    }
+                    continue;
+                }
                 Err(e) => return Err(e.into()),
             };
             let Some(run) = run_opt else {
@@ -384,6 +421,15 @@ impl WatchEngine {
                     tracing::warn!("rate limited; backing off {:?}", retry_after);
                     let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
                     if let Some(outcome) = self.wait_tick(backoff, deadline).await {
+                        return Ok(outcome);
+                    }
+                    continue;
+                }
+                Err(ProviderError::Transport(message)) => {
+                    tracing::warn!("transport error ({message}); continuing with polling");
+                    if let Some(outcome) =
+                        self.wait_tick(self.config.active_interval, deadline).await
+                    {
                         return Ok(outcome);
                     }
                     continue;

@@ -86,6 +86,7 @@ pub fn job(id: u64, name: &str, phase: Phase) -> Job {
 pub enum Step0 {
     NoRun,
     Fail(String),
+    Transport(String),
     World(World),
     Page(RunsPage),
     RateLimited(Duration),
@@ -201,6 +202,7 @@ impl RunSource for FakeProvider {
                 runs: Vec::new(),
             }),
             Step0::Fail(message) => Err(ProviderError::Other(message)),
+            Step0::Transport(message) => Err(ProviderError::Transport(message)),
             Step0::World(world) => Ok(RunsPage {
                 total_count: 1,
                 runs: vec![world.run],
@@ -221,6 +223,7 @@ impl RunSource for FakeProvider {
         match self.state.advance() {
             Step0::NoRun => Err(ProviderError::NotFound("no run".to_string())),
             Step0::Fail(message) => Err(ProviderError::Other(message)),
+            Step0::Transport(message) => Err(ProviderError::Transport(message)),
             Step0::World(world) => Ok(world.run),
             Step0::Page(page) => Ok(page
                 .runs
@@ -236,6 +239,7 @@ impl RunSource for FakeProvider {
     async fn list_jobs(&self, _run_id: u64) -> Result<Vec<Job>, ProviderError> {
         match self.state.current() {
             Step0::World(world) => Ok(world.jobs),
+            Step0::Transport(message) => Err(ProviderError::Transport(message.clone())),
             Step0::RateLimited(duration) => Err(ProviderError::RateLimited {
                 retry_after: duration,
             }),

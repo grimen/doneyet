@@ -22,6 +22,7 @@ impl GithubFactory {
             retry: doneyet_github::RetryPolicy {
                 max_retries: 2,
                 base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
             },
         }
     }
