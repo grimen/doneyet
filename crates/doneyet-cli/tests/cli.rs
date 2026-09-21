@@ -140,7 +140,7 @@ async fn watch_command_follows_run_until_terminal() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn watch_with_webhook_accepts_push_and_completes() {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
     let server = MockServer::start().await;
@@ -186,7 +186,7 @@ async fn watch_with_webhook_accepts_push_and_completes() {
         .expect("spawn doneyet");
 
     let body = r#"{"action":"in_progress","workflow_run":{"id":2841},"repository":{"full_name":"acme/api"}}"#;
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(b"e2e-secret").unwrap();
+    let mut mac = <Hmac<Sha256>>::new_from_slice(b"e2e-secret").unwrap();
     mac.update(body.as_bytes());
     let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
 

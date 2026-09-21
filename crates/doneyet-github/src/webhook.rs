@@ -9,7 +9,7 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use doneyet_core::model::RepoRef;
 use doneyet_core::ports::{ProviderError, PushSource, RefreshHint};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -101,7 +101,7 @@ fn signature_valid(secret: &[u8], headers: &HeaderMap, body: &[u8]) -> bool {
     else {
         return false;
     };
-    let Ok(mut mac) = <HmacSha256 as Mac>::new_from_slice(secret) else {
+    let Ok(mut mac) = HmacSha256::new_from_slice(secret) else {
         return false;
     };
     mac.update(body);

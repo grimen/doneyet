@@ -1,7 +1,7 @@
 use doneyet_core::model::RepoRef;
 use doneyet_core::ports::PushSource;
 use doneyet_github::webhook::WebhookPush;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::str::FromStr;
 use std::time::Duration;
@@ -9,7 +9,7 @@ use std::time::Duration;
 const SECRET: &str = "test-secret";
 
 fn sign(secret: &str, body: &str) -> String {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).unwrap();
+    let mut mac = <Hmac<Sha256>>::new_from_slice(secret.as_bytes()).unwrap();
     mac.update(body.as_bytes());
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
 }
