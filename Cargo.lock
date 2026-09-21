@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "doneyet-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "doneyet-core",
@@ -542,7 +542,7 @@ dependencies = [
 
 [[package]]
 name = "doneyet-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "doneyet-contract"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "doneyet-core",
  "wiremock",
@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "doneyet-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "jiff",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "doneyet-github"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "doneyet-ux"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anstyle",
  "doneyet-core",
