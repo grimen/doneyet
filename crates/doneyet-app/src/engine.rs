@@ -323,11 +323,20 @@ impl WatchEngine {
                         Some(stats) => Some(stats),
                         None => self.fetch_stats(&target, &run).await,
                     };
+                    let mut annotations = Vec::new();
+                    for job in &jobs {
+                        if job.phase.is_failed() {
+                            match self.provider.list_annotations(job.id).await {
+                                Ok(mut ann) => annotations.append(&mut ann),
+                                Err(e) => tracing::warn!("annotations fetch failed: {e}"),
+                            }
+                        }
+                    }
                     let world = World {
                         repo: self.repo.clone(),
                         run,
                         jobs,
-                        annotations: Vec::new(),
+                        annotations,
                         stats,
                         job_logs,
                     };

@@ -48,6 +48,13 @@ pub fn run_with(id: u64, phase: Phase) -> WorkflowRun {
     }
 }
 
+pub fn failed_world() -> World {
+    world(
+        Phase::Done(Conclusion::Failure),
+        vec![job(2, "test", Phase::Done(Conclusion::Failure))],
+    )
+}
+
 pub fn world(phase: Phase, jobs: Vec<Job>) -> World {
     World {
         repo: repo(),
@@ -82,6 +89,8 @@ pub enum Step0 {
     Page(RunsPage),
 }
 
+type AnnotationScript = Mutex<HashMap<u64, VecDeque<Result<Vec<Annotation>, String>>>>;
+
 pub struct FakeProvider {
     state: Arc<FakeState>,
 }
@@ -93,6 +102,7 @@ pub struct FakeState {
     history: Mutex<RunsPage>,
     log_script: Mutex<HashMap<u64, VecDeque<Result<LogChunk, String>>>>,
     log_calls: Mutex<Vec<(u64, u64)>>,
+    annotation_script: AnnotationScript,
 }
 
 impl FakeProvider {
@@ -108,6 +118,7 @@ impl FakeProvider {
                 }),
                 log_script: Mutex::new(HashMap::new()),
                 log_calls: Mutex::new(Vec::new()),
+                annotation_script: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -117,6 +128,16 @@ impl FakeProvider {
             .log_script
             .lock()
             .expect("log script poisoned")
+            .entry(job_id)
+            .or_default()
+            .push_back(reply);
+    }
+
+    pub fn script_annotations(&self, job_id: u64, reply: Result<Vec<Annotation>, String>) {
+        self.state
+            .annotation_script
+            .lock()
+            .expect("annotation script poisoned")
             .entry(job_id)
             .or_default()
             .push_back(reply);
@@ -218,8 +239,19 @@ impl RunSource for FakeProvider {
 
 #[async_trait::async_trait]
 impl AnnotationSource for FakeProvider {
-    async fn list_annotations(&self, _job_id: u64) -> Result<Vec<Annotation>, ProviderError> {
-        Ok(Vec::new())
+    async fn list_annotations(&self, job_id: u64) -> Result<Vec<Annotation>, ProviderError> {
+        let reply = self
+            .state
+            .annotation_script
+            .lock()
+            .expect("annotation script poisoned")
+            .get_mut(&job_id)
+            .and_then(|queue| queue.pop_front());
+        match reply {
+            Some(Ok(annotations)) => Ok(annotations),
+            Some(Err(message)) => Err(ProviderError::Other(message)),
+            None => Ok(Vec::new()),
+        }
     }
 }
 

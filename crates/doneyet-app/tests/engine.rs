@@ -1,11 +1,12 @@
 mod common;
 
 use common::{
-    FakeProvider, ImmediatePush, RecordingRenderer, Step0, hint, job, repo, success_outcome, world,
+    FakeProvider, ImmediatePush, RecordingRenderer, Step0, failed_world, hint, job, repo,
+    success_outcome, world,
 };
 use doneyet_app::{NoopPushSource, WatchConfig, WatchEngine, WatchOutcome, WatchTarget};
 use doneyet_core::event::DomainEvent;
-use doneyet_core::model::{Conclusion, Phase, RunsQuery};
+use doneyet_core::model::{Annotation, Conclusion, Phase, RunsQuery};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -774,4 +775,69 @@ async fn replaced_log_is_refetched_from_the_start() {
         vec!["new".to_string()]
     );
     assert_eq!(handle.log_calls(), vec![(1, 0), (1, 6), (1, 0)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn watch_surfaces_failed_job_annotations() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(failed_world()),
+    ]);
+    provider.script_annotations(
+        2,
+        Ok(vec![Annotation {
+            job_id: 2,
+            path: Some("src/lib.rs".to_string()),
+            start_line: Some(42),
+            message: "unused variable: x".to_string(),
+        }]),
+    );
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        config(),
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("watch succeeds");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Failure)
+    ));
+    let frames = renderer.frames();
+    let last_frame = &frames.last().expect("at least one frame");
+    assert_eq!(last_frame.0.annotations.len(), 1);
+    assert_eq!(last_frame.0.annotations[0].job_id, 2);
+    assert_eq!(last_frame.0.annotations[0].message, "unused variable: x");
+}
+
+#[tokio::test(start_paused = true)]
+async fn annotation_fetch_failure_does_not_abort_watch() {
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(failed_world()),
+    ]);
+    provider.script_annotations(2, Err("annotations service down".to_string()));
+    let renderer = RecordingRenderer::default();
+    let mut engine = WatchEngine::new(
+        repo(),
+        Box::new(provider),
+        Box::new(renderer.clone()),
+        Box::new(NoopPushSource),
+        config(),
+        CancellationToken::new(),
+    );
+    let outcome = engine
+        .watch(WatchTarget::Run(2841))
+        .await
+        .expect("annotation error must not kill the watch");
+    assert!(matches!(
+        outcome,
+        WatchOutcome::Completed(Conclusion::Failure)
+    ));
 }
