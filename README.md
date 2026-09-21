@@ -86,6 +86,21 @@ can set only what it wants — everything else falls back to the built-in look:
 
 Save it anywhere and pass the path: `--theme ~/.config/doneyet/gruvbox.json`.
 
+## Configuration
+
+Defaults can live in a TOML file instead of repeated flags. The path is
+`$DONEYET_CONFIG`, or `~/.config/doneyet/config.toml` when that is unset.
+Precedence is command line > config file > built-in default.
+
+```toml
+interval = 3        # poll interval (watch and dash), seconds
+theme = "ascii"     # built-in theme name or path to a JSON theme file
+notify = true       # fire notify-send when a watched run finishes
+api_base = "https://github.example/api/v3"   # GitHub API base URL
+```
+
+A missing file is fine; a file that fails to parse is a hard error (exit 4).
+
 ## Recording
 
 `--record` taps the render stream: every frame and the final outcome are

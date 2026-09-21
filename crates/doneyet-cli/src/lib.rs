@@ -1,3 +1,4 @@
+pub mod config;
 pub mod keys;
 pub mod notify;
 pub mod repo;
@@ -54,8 +55,11 @@ pub enum Command {
             help = "Watch the run with this id instead of the latest matching run"
         )]
         run_id: Option<u64>,
-        #[arg(long, default_value_t = 3)]
-        interval: u64,
+        #[arg(
+            long,
+            help = "Poll interval in seconds (defaults to the configured value or 3)"
+        )]
+        interval: Option<u64>,
         #[arg(
             long,
             requires = "webhook_secret",
@@ -108,8 +112,11 @@ pub enum Command {
         branch: Option<String>,
         #[arg(long)]
         event: Option<String>,
-        #[arg(long, default_value_t = 5)]
-        interval: u64,
+        #[arg(
+            long,
+            help = "Poll interval in seconds (defaults to the configured value or 5)"
+        )]
+        interval: Option<u64>,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -158,8 +165,11 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct CommonArgs {
-    #[arg(long, default_value = doneyet_github::DEFAULT_API_BASE)]
-    pub api_base: String,
+    #[arg(
+        long,
+        help = "GitHub API base URL (defaults to the configured value or api.github.com)"
+    )]
+    pub api_base: Option<String>,
     #[arg(long, env = "DONEYET_TOKEN")]
     pub token: Option<String>,
     #[arg(long)]
@@ -168,14 +178,17 @@ pub struct CommonArgs {
     pub width: Option<usize>,
     #[arg(
         long,
-        default_value = "default",
         help = "Render theme: built-in name (default, ascii) or path to a JSON theme file"
     )]
-    pub theme: String,
+    pub theme: Option<String>,
 }
 
-fn resolve_theme(common: &CommonArgs) -> anyhow::Result<doneyet_ux::Theme> {
-    doneyet_ux::load_theme(&common.theme).map_err(|error| anyhow::anyhow!("{error}"))
+fn resolve_theme(
+    common: &CommonArgs,
+    config: &config::Config,
+) -> anyhow::Result<doneyet_ux::Theme> {
+    doneyet_ux::load_theme(&config.theme_or(common.theme.clone()))
+        .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 const KNOWN_SUBCOMMANDS: [&str; 10] = [
@@ -294,6 +307,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
 }
 
 async fn replay_file(path: String, realtime: bool, common: CommonArgs) -> anyhow::Result<u32> {
+    let config = config::Config::load()?;
     let events = doneyet_ux::read_records(std::path::Path::new(&path))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     if events.is_empty() {
@@ -301,7 +315,7 @@ async fn replay_file(path: String, realtime: bool, common: CommonArgs) -> anyhow
     }
     let mut renderer = TermRenderer::with_theme(
         Box::new(std::io::stdout()),
-        resolve_theme(&common)?,
+        resolve_theme(&common, &config)?,
         color_enabled(&common),
         terminal_width(&common),
         Box::new(jiff::Timestamp::now),
@@ -331,17 +345,21 @@ async fn replay_file(path: String, realtime: bool, common: CommonArgs) -> anyhow
     }
 }
 
-fn build_provider(repo: RepoRef, common: &CommonArgs) -> anyhow::Result<GithubProvider> {
+fn build_provider(
+    repo: RepoRef,
+    common: &CommonArgs,
+    config: &config::Config,
+) -> anyhow::Result<GithubProvider> {
     let token = common
         .token
         .clone()
         .or_else(doneyet_github::token::resolve_from_environment);
-    let config = GithubConfig {
-        api_base: common.api_base.clone(),
+    let github = GithubConfig {
+        api_base: config.api_base_or(common.api_base.clone()),
         token,
         ..GithubConfig::default()
     };
-    GithubProvider::new(repo, config).map_err(Into::into)
+    GithubProvider::new(repo, github).map_err(Into::into)
 }
 
 fn color_enabled(common: &CommonArgs) -> bool {
@@ -365,7 +383,7 @@ struct WatchOptions {
     commit: Option<String>,
     pr: Option<u64>,
     run_id: Option<u64>,
-    interval: u64,
+    interval: Option<u64>,
     webhook: Option<String>,
     webhook_secret: Option<String>,
     record: Option<String>,
@@ -385,8 +403,11 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     if json && opts.record.is_some() {
         anyhow::bail!("--format json cannot be combined with --record");
     }
+    let file_config = config::Config::load()?;
+    let interval = file_config.interval_or(opts.interval, 3).max(1);
+    let notify = file_config.notify_or(opts.notify);
     let repo = repo::resolve(opts.repo.as_deref())?;
-    let provider = build_provider(repo.clone(), &common)?;
+    let provider = build_provider(repo.clone(), &common, &file_config)?;
     let (hint_tx, channel_push) = doneyet_app::ChannelPushSource::channel();
     let push: Box<dyn doneyet_core::ports::PushSource> = match (opts.webhook, opts.webhook_secret) {
         (Some(addr), Some(secret)) => {
@@ -430,7 +451,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         Box::new(std::io::stdout())
     };
     let config = WatchConfig {
-        active_interval: Duration::from_secs(opts.interval.max(1)),
+        active_interval: Duration::from_secs(interval),
         idle_interval: Duration::from_secs(20),
         log_tail: opts.logs,
         log_grep: opts.grep,
@@ -443,7 +464,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     let outcome = if let Some(sha) = commit_sha {
         let mut view = BoardView {
             redraw: doneyet_ux::InlineRedraw::new(stdout),
-            theme: resolve_theme(&common)?,
+            theme: resolve_theme(&common, &file_config)?,
             color: color_enabled(&common),
             width: terminal_width(&common),
             now: Box::new(jiff::Timestamp::now),
@@ -481,7 +502,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         } else {
             let term = TermRenderer::with_theme(
                 stdout,
-                resolve_theme(&common)?,
+                resolve_theme(&common, &file_config)?,
                 color_enabled(&common),
                 terminal_width(&common),
                 Box::new(jiff::Timestamp::now),
@@ -498,7 +519,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
             WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
         engine.watch(target).await?
     };
-    if opts.notify {
+    if notify {
         if let WatchOutcome::Completed(conclusion) = &outcome {
             notify::send(conclusion);
         }
@@ -530,9 +551,11 @@ async fn dash(
     limit: u32,
     branch: Option<String>,
     event: Option<String>,
-    interval: u64,
+    interval: Option<u64>,
     common: CommonArgs,
 ) -> anyhow::Result<u32> {
+    let config = config::Config::load()?;
+    let interval = config.interval_or(interval, 5).max(1);
     let repo = repo::resolve(repo_arg.as_deref())?;
     let query = RunsQuery {
         repo: repo.clone(),
@@ -541,7 +564,7 @@ async fn dash(
         event,
         limit,
     };
-    let provider = build_provider(repo.clone(), &common)?;
+    let provider = build_provider(repo.clone(), &common, &config)?;
     let (hint_tx, push) = ChannelPushSource::channel();
     let shutdown = CancellationToken::new();
     let cancel = shutdown.clone();
@@ -562,7 +585,7 @@ async fn dash(
     };
     let mut view = BoardView {
         redraw: doneyet_ux::InlineRedraw::new(stdout),
-        theme: resolve_theme(&common)?,
+        theme: resolve_theme(&common, &config)?,
         color: color_enabled(&common),
         width: terminal_width(&common),
         now: Box::new(jiff::Timestamp::now),
@@ -571,7 +594,7 @@ async fn dash(
         Box::new(provider),
         Box::new(push),
         DashConfig {
-            interval: Duration::from_secs(interval.max(1)),
+            interval: Duration::from_secs(interval),
         },
         shutdown,
     );
@@ -587,8 +610,9 @@ async fn list_runs(
     event: Option<String>,
     common: CommonArgs,
 ) -> anyhow::Result<u32> {
+    let config = config::Config::load()?;
     let repo = repo::resolve(repo_arg.as_deref())?;
-    let provider = build_provider(repo.clone(), &common)?;
+    let provider = build_provider(repo.clone(), &common, &config)?;
     let query = RunsQuery {
         repo,
         branch,
@@ -601,7 +625,7 @@ async fn list_runs(
         "{}",
         doneyet_ux::runs_table_with(
             &page,
-            &resolve_theme(&common)?,
+            &resolve_theme(&common, &config)?,
             color_enabled(&common),
             terminal_width(&common),
             jiff::Timestamp::now()
@@ -616,8 +640,9 @@ async fn inspect_run(
     logs_failed: Option<usize>,
     common: CommonArgs,
 ) -> anyhow::Result<u32> {
+    let config = config::Config::load()?;
     let repo = repo::resolve(repo_arg.as_deref())?;
-    let provider = build_provider(repo.clone(), &common)?;
+    let provider = build_provider(repo.clone(), &common, &config)?;
     let run = provider.get_run(run_id).await?;
     let jobs = provider.list_jobs(run_id).await?;
     let failed_ids: Vec<u64> = jobs
