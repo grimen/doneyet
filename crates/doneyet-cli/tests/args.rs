@@ -80,6 +80,29 @@ fn grep_parses_alongside_logs() {
 }
 
 #[test]
+fn watch_run_id_parses() {
+    use clap::Parser;
+    use doneyet_cli::{Cli, Command};
+
+    let cli = Cli::parse_from(["doneyet", "watch", "acme/api", "--run-id", "2841"]);
+    match cli.command {
+        Command::Watch { run_id, .. } => assert_eq!(run_id, Some(2841)),
+        other => panic!("expected watch, got {other:?}"),
+    }
+}
+
+#[test]
+fn watch_run_id_conflicts_with_commit() {
+    use clap::Parser;
+    use doneyet_cli::Cli;
+
+    let err = Cli::try_parse_from([
+        "doneyet", "watch", "acme/api", "--run-id", "1", "--commit", "x",
+    ]);
+    assert!(err.is_err(), "--run-id must conflict with --commit");
+}
+
+#[test]
 fn dash_is_a_subcommand_not_a_repo() {
     let out = inject_default_subcommand(vec!["doneyet".to_string(), "dash".to_string()]);
     assert_eq!(out, vec!["doneyet".to_string(), "dash".to_string()]);

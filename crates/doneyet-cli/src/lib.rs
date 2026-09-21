@@ -36,6 +36,12 @@ pub enum Command {
         branch: Option<String>,
         #[arg(long)]
         commit: Option<String>,
+        #[arg(
+            long,
+            conflicts_with_all = ["commit", "branch"],
+            help = "Watch the run with this id instead of the latest matching run"
+        )]
+        run_id: Option<u64>,
         #[arg(long, default_value_t = 3)]
         interval: u64,
         #[arg(
@@ -195,6 +201,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             repo,
             branch,
             commit,
+            run_id,
             interval,
             webhook,
             webhook_secret,
@@ -209,6 +216,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     repo,
                     branch,
                     commit,
+                    run_id,
                     interval,
                     webhook,
                     webhook_secret,
@@ -320,6 +328,7 @@ struct WatchOptions {
     repo: Option<String>,
     branch: Option<String>,
     commit: Option<String>,
+    run_id: Option<u64>,
     interval: u64,
     webhook: Option<String>,
     webhook_secret: Option<String>,
@@ -402,12 +411,15 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         }
         outcome
     } else {
-        let query = RunsQuery {
-            repo: repo.clone(),
-            branch: opts.branch,
-            head_sha: opts.commit,
-            event: None,
-            limit: 1,
+        let target = match opts.run_id {
+            Some(id) => WatchTarget::Run(id),
+            None => WatchTarget::Latest(RunsQuery {
+                repo: repo.clone(),
+                branch: opts.branch,
+                head_sha: opts.commit,
+                event: None,
+                limit: 1,
+            }),
         };
         let term = TermRenderer::with_theme(
             stdout,
@@ -425,7 +437,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         };
         let mut engine =
             WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
-        engine.watch(WatchTarget::Latest(query)).await?
+        engine.watch(target).await?
     };
     if opts.notify {
         if let WatchOutcome::Completed(conclusion) = &outcome {

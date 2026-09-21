@@ -554,6 +554,38 @@ async fn watch_notify_fires_desktop_notification_on_completion() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_run_id_follows_that_specific_run() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::RUN))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--run-id",
+            "2841",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#2841"), "{stdout}");
+}
+
 fn run_json(id: u64, status: &str, conclusion: Option<&str>) -> String {
     format!(
         r#"{{"id":{id},"run_number":{id},"name":"wf{id}.yml","display_title":"build & test","head_branch":"main","head_sha":"deadbeef","event":"push","status":"{status}","conclusion":{},"actor":{{"login":"jonas"}},"html_url":"https://github.com/acme/api/actions/runs/{id}","created_at":"2026-09-21T10:00:00Z","run_started_at":"2026-09-21T10:00:01Z","updated_at":"2026-09-21T10:03:00Z"}}"#,
