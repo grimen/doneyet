@@ -6,13 +6,14 @@ use doneyet_core::model::{
     Conclusion, Job, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
 };
 use doneyet_core::ports::{
-    AnnotationSource, LogChunk, LogSource, ProviderError, RefreshHint, RunSource,
+    AnnotationSource, LogChunk, LogSource, ProviderError, RefreshHint, RenderError, RunSource,
 };
 use jiff::Timestamp;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio_util::sync::CancellationToken;
 
 pub fn ts(s: &str) -> Timestamp {
     s.parse().expect("valid RFC3339 timestamp")
@@ -26,9 +27,13 @@ pub fn repo() -> RepoRef {
 }
 
 pub fn run(phase: Phase) -> WorkflowRun {
+    run_with(2841, phase)
+}
+
+pub fn run_with(id: u64, phase: Phase) -> WorkflowRun {
     WorkflowRun {
-        id: 2841,
-        run_number: 2841,
+        id,
+        run_number: id,
         name: "ci.yml".to_string(),
         display_title: "build & test".to_string(),
         head_branch: Some("main".to_string()),
@@ -36,7 +41,7 @@ pub fn run(phase: Phase) -> WorkflowRun {
         event: "push".to_string(),
         phase,
         actor: "jonas".to_string(),
-        html_url: "https://github.com/acme/api/actions/runs/2841".to_string(),
+        html_url: format!("https://github.com/acme/api/actions/runs/{id}"),
         created_at: ts("2026-09-21T10:00:00Z"),
         run_started_at: Some(ts("2026-09-21T10:00:01Z")),
         updated_at: ts("2026-09-21T10:03:00Z"),
@@ -74,6 +79,7 @@ pub enum Step0 {
     NoRun,
     Fail(String),
     World(World),
+    Page(RunsPage),
 }
 
 pub struct FakeProvider {
@@ -158,7 +164,7 @@ impl FakeState {
 #[async_trait::async_trait]
 impl RunSource for FakeProvider {
     async fn list_runs(&self, query: &RunsQuery) -> Result<RunsPage, ProviderError> {
-        if query.limit >= 20 {
+        if query.limit >= 20 && query.head_sha.is_none() {
             return Ok(self.state.history.lock().expect("history poisoned").clone());
         }
         self.state
@@ -176,6 +182,7 @@ impl RunSource for FakeProvider {
                 total_count: 1,
                 runs: vec![world.run],
             }),
+            Step0::Page(page) => Ok(page),
         }
     }
 
@@ -189,6 +196,11 @@ impl RunSource for FakeProvider {
             Step0::NoRun => Err(ProviderError::NotFound("no run".to_string())),
             Step0::Fail(message) => Err(ProviderError::Other(message)),
             Step0::World(world) => Ok(world.run),
+            Step0::Page(page) => Ok(page
+                .runs
+                .into_iter()
+                .next()
+                .expect("page step needs at least one run")),
         }
     }
 
@@ -321,6 +333,23 @@ pub fn hint() -> RefreshHint {
     RefreshHint {
         repo: repo(),
         run_id: Some(2841),
+    }
+}
+
+pub struct PageSink {
+    pub pages: std::sync::Arc<std::sync::Mutex<Vec<RunsPage>>>,
+    pub cancel: CancellationToken,
+    pub stop_after: usize,
+}
+
+impl doneyet_app::BoardSink for PageSink {
+    fn render_page(&mut self, page: &RunsPage) -> Result<(), RenderError> {
+        let mut pages = self.pages.lock().expect("pages poisoned");
+        pages.push(page.clone());
+        if pages.len() >= self.stop_after {
+            self.cancel.cancel();
+        }
+        Ok(())
     }
 }
 

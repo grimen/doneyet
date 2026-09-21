@@ -121,6 +121,107 @@ pub trait BoardSink: Send {
     fn render_page(&mut self, page: &RunsPage) -> Result<(), RenderError>;
 }
 
+async fn push_or_tick(
+    push: &mut Box<dyn PushSource>,
+    push_dead: &mut bool,
+    shutdown: &CancellationToken,
+    interval: Duration,
+) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(interval) => false,
+        hint = push.wait(), if !*push_dead => {
+            match hint {
+                Ok(_) => false,
+                Err(error) => {
+                    tracing::warn!("push source failed ({error}); continuing with polling only");
+                    *push_dead = true;
+                    false
+                }
+            }
+        }
+        _ = shutdown.cancelled() => true,
+    }
+}
+
+pub fn aggregate_conclusion(runs: &[WorkflowRun]) -> Conclusion {
+    if runs.iter().any(|run| {
+        matches!(
+            run.phase,
+            Phase::Done(Conclusion::Failure | Conclusion::StartupFailure)
+        )
+    }) {
+        Conclusion::Failure
+    } else if runs.iter().any(|run| {
+        matches!(
+            run.phase,
+            Phase::Done(Conclusion::TimedOut | Conclusion::Cancelled)
+        )
+    }) {
+        Conclusion::Cancelled
+    } else {
+        Conclusion::Success
+    }
+}
+
+pub struct CommitWatchEngine {
+    provider: Box<dyn RunSource>,
+    push: Box<dyn PushSource>,
+    push_dead: bool,
+    config: WatchConfig,
+    shutdown: CancellationToken,
+}
+
+impl CommitWatchEngine {
+    pub fn new(
+        provider: Box<dyn RunSource>,
+        push: Box<dyn PushSource>,
+        config: WatchConfig,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self {
+            provider,
+            push,
+            push_dead: false,
+            config,
+            shutdown,
+        }
+    }
+
+    pub async fn run(
+        &mut self,
+        query: RunsQuery,
+        sink: &mut dyn BoardSink,
+    ) -> Result<WatchOutcome, EngineError> {
+        loop {
+            if self.shutdown.is_cancelled() {
+                return Ok(WatchOutcome::Interrupted);
+            }
+            let page = self.provider.list_runs(&query).await?;
+            sink.render_page(&page)?;
+            let all_terminal =
+                !page.runs.is_empty() && page.runs.iter().all(|run| run.phase.is_terminal());
+            if all_terminal {
+                return Ok(WatchOutcome::Completed(aggregate_conclusion(&page.runs)));
+            }
+            let interval = if page.runs.is_empty() {
+                self.config.idle_interval
+            } else {
+                self.config.active_interval
+            };
+            if push_or_tick(
+                &mut self.push,
+                &mut self.push_dead,
+                &self.shutdown,
+                interval,
+            )
+            .await
+            {
+                return Ok(WatchOutcome::Interrupted);
+            }
+        }
+    }
+}
+
 pub struct DashEngine {
     provider: Box<dyn RunSource>,
     push: Box<dyn PushSource>,
@@ -156,26 +257,17 @@ impl DashEngine {
             }
             let page = self.provider.list_runs(&query).await?;
             sink.render_page(&page)?;
-            if self.wait_tick().await {
+            let interval = self.config.interval;
+            if push_or_tick(
+                &mut self.push,
+                &mut self.push_dead,
+                &self.shutdown,
+                interval,
+            )
+            .await
+            {
                 return Ok(DashOutcome::Interrupted);
             }
-        }
-    }
-
-    async fn wait_tick(&mut self) -> bool {
-        tokio::select! {
-            _ = tokio::time::sleep(self.config.interval) => false,
-            hint = self.push.wait(), if !self.push_dead => {
-                match hint {
-                    Ok(_) => false,
-                    Err(error) => {
-                        tracing::warn!("push source failed ({error}); continuing with polling only");
-                        self.push_dead = true;
-                        false
-                    }
-                }
-            }
-            _ = self.shutdown.cancelled() => true,
         }
     }
 }

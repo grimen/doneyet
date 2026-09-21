@@ -331,13 +331,6 @@ struct WatchOptions {
 
 async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     let repo = repo::resolve(opts.repo.as_deref())?;
-    let query = RunsQuery {
-        repo: repo.clone(),
-        branch: opts.branch,
-        head_sha: opts.commit,
-        event: None,
-        limit: 1,
-    };
     let provider = build_provider(repo.clone(), &common)?;
     let (hint_tx, channel_push) = doneyet_app::ChannelPushSource::channel();
     let push: Box<dyn doneyet_core::ports::PushSource> = match (opts.webhook, opts.webhook_secret) {
@@ -377,28 +370,63 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     } else {
         Box::new(std::io::stdout())
     };
-    let term = TermRenderer::with_theme(
-        stdout,
-        resolve_theme(&common)?,
-        color_enabled(&common),
-        terminal_width(&common),
-        Box::new(jiff::Timestamp::now),
-    );
-    let renderer: Box<dyn doneyet_core::ports::Renderer> = match opts.record {
-        Some(path) => Box::new(doneyet_ux::record::TeeRenderer::new(
-            Box::new(term),
-            std::path::Path::new(&path),
-        )?),
-        None => Box::new(term),
-    };
     let config = WatchConfig {
         active_interval: Duration::from_secs(opts.interval.max(1)),
         idle_interval: Duration::from_secs(20),
         log_tail: opts.logs,
         log_grep: opts.grep,
     };
-    let mut engine = WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
-    let outcome = engine.watch(WatchTarget::Latest(query)).await?;
+    let outcome = if let Some(sha) = opts.commit.clone() {
+        let mut view = BoardView {
+            redraw: doneyet_ux::InlineRedraw::new(stdout),
+            theme: resolve_theme(&common)?,
+            color: color_enabled(&common),
+            width: terminal_width(&common),
+            now: Box::new(jiff::Timestamp::now),
+        };
+        let query = RunsQuery {
+            repo: repo.clone(),
+            branch: opts.branch.clone(),
+            head_sha: Some(sha.clone()),
+            event: None,
+            limit: 20,
+        };
+        let mut engine =
+            doneyet_app::CommitWatchEngine::new(Box::new(provider), push, config, shutdown);
+        let outcome = engine.run(query, &mut view).await?;
+        if let WatchOutcome::Completed(conclusion) = &outcome {
+            println!(
+                "\ndoneyet: all runs for {sha} finished: {}",
+                doneyet_ux::format::conclusion_word(conclusion)
+            );
+        }
+        outcome
+    } else {
+        let query = RunsQuery {
+            repo: repo.clone(),
+            branch: opts.branch,
+            head_sha: opts.commit,
+            event: None,
+            limit: 1,
+        };
+        let term = TermRenderer::with_theme(
+            stdout,
+            resolve_theme(&common)?,
+            color_enabled(&common),
+            terminal_width(&common),
+            Box::new(jiff::Timestamp::now),
+        );
+        let renderer: Box<dyn doneyet_core::ports::Renderer> = match opts.record {
+            Some(path) => Box::new(doneyet_ux::record::TeeRenderer::new(
+                Box::new(term),
+                std::path::Path::new(&path),
+            )?),
+            None => Box::new(term),
+        };
+        let mut engine =
+            WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
+        engine.watch(WatchTarget::Latest(query)).await?
+    };
     if opts.notify {
         if let WatchOutcome::Completed(conclusion) = &outcome {
             notify::send(conclusion);
