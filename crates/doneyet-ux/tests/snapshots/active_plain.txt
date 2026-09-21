@@ -1,0 +1,7 @@
+acme/api  ci.yml › build & test  #2841  ◐ in_progress  3m12s
+✔ build (linux-x64)     2m01s ████████████
+✖ test (macos-arm64)    1m02s ██████░░░░░░
+  │  ✖ Run cargo test
+◐ deploy (linux-x64)      41s ████░░░░░░░░
+  │  ◐ Roll out
+○ notify (linux-x64)        —

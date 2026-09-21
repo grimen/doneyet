@@ -1,0 +1,8 @@
+acme/api  ci.yml › build & test  #2841  ✖ failure  3m12s
+✔ build (linux-x64)     2m01s ████████████
+✖ test (macos-arm64)    1m02s ██████░░░░░░
+  │  ✖ Run cargo test
+  │  ⚠ src/lib.rs:42 unused variable: `x`
+  │  ⚠ process exited with code 1
+↷ deploy (linux-x64)        —
+↷ notify (linux-x64)        —

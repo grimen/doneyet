@@ -1,0 +1,7 @@
+[1macme/api[0m  ci.yml › build & test  #2841  [36m◐[0m [36min_progress[0m  3m12s
+[32m✔[0m build (linux-x64)     2m01s [32m████████████[0m
+[31m✖[0m test (macos-arm64)    1m02s [31m██████░░░░░░[0m
+  │  [31m✖[0m Run cargo test
+[36m◐[0m deploy (linux-x64)      41s [36m████░░░░░░░░[0m
+  │  [36m◐[0m Roll out
+[33m○[0m notify (linux-x64)        —

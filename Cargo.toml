@@ -10,6 +10,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
+doneyet-ux = { path = "crates/doneyet-ux" }
 doneyet-github = { path = "crates/doneyet-github" }
 doneyet-contract = { path = "crates/doneyet-contract" }
 doneyet-core = { path = "crates/doneyet-core" }
