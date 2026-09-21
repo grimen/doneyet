@@ -61,6 +61,12 @@ pub enum Command {
         logs: Option<usize>,
         #[arg(
             long,
+            requires = "logs",
+            help = "Show only tailed log lines containing PATTERN (substring)"
+        )]
+        grep: Option<String>,
+        #[arg(
+            long,
             help = "Fire a desktop notification (notify-send) when the run finishes"
         )]
         notify: bool,
@@ -194,6 +200,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             webhook_secret,
             record,
             logs,
+            grep,
             notify,
             common,
         } => {
@@ -207,6 +214,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     webhook_secret,
                     record,
                     logs,
+                    grep,
                     notify,
                 },
                 common,
@@ -317,6 +325,7 @@ struct WatchOptions {
     webhook_secret: Option<String>,
     record: Option<String>,
     logs: Option<usize>,
+    grep: Option<String>,
     notify: bool,
 }
 
@@ -386,6 +395,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         active_interval: Duration::from_secs(opts.interval.max(1)),
         idle_interval: Duration::from_secs(20),
         log_tail: opts.logs,
+        log_grep: opts.grep,
     };
     let mut engine = WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
     let outcome = engine.watch(WatchTarget::Latest(query)).await?;

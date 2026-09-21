@@ -8,6 +8,16 @@ pub struct LogCursor {
 }
 
 pub fn append_log(cursor: &mut LogCursor, chunk: &LogChunk, limit: usize) {
+    drain_lines(cursor, chunk, |_| true);
+    cap(cursor, limit);
+}
+
+pub fn append_log_matching(cursor: &mut LogCursor, chunk: &LogChunk, limit: usize, grep: &str) {
+    drain_lines(cursor, chunk, |line| line.contains(grep));
+    cap(cursor, limit);
+}
+
+fn drain_lines(cursor: &mut LogCursor, chunk: &LogChunk, keep: impl Fn(&str) -> bool) {
     if chunk.next_offset < cursor.offset {
         cursor.lines.clear();
         cursor.pending.clear();
@@ -24,8 +34,13 @@ pub fn append_log(cursor: &mut LogCursor, chunk: &LogChunk, limit: usize) {
         if line.ends_with('\r') {
             line.pop();
         }
-        cursor.lines.push(line);
+        if keep(&line) {
+            cursor.lines.push(line);
+        }
     }
+}
+
+fn cap(cursor: &mut LogCursor, limit: usize) {
     if cursor.lines.len() > limit {
         let drop_n = cursor.lines.len() - limit;
         cursor.lines.drain(0..drop_n);

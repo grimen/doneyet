@@ -14,6 +14,7 @@ fn config() -> WatchConfig {
         active_interval: Duration::from_secs(3),
         idle_interval: Duration::from_secs(20),
         log_tail: None,
+        log_grep: None,
     }
 }
 

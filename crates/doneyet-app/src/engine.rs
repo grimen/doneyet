@@ -3,7 +3,7 @@ use std::time::Duration;
 use doneyet_core::diff::diff_worlds;
 use std::collections::HashMap;
 
-use doneyet_core::logtail::{LogCursor, append_log, display_lines};
+use doneyet_core::logtail::{LogCursor, append_log, append_log_matching, display_lines};
 use doneyet_core::model::{
     Conclusion, Job, JobLog, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
 };
@@ -41,6 +41,7 @@ pub struct WatchConfig {
     pub active_interval: Duration,
     pub idle_interval: Duration,
     pub log_tail: Option<usize>,
+    pub log_grep: Option<String>,
 }
 
 impl Default for WatchConfig {
@@ -49,6 +50,7 @@ impl Default for WatchConfig {
             active_interval: Duration::from_secs(3),
             idle_interval: Duration::from_secs(20),
             log_tail: None,
+            log_grep: None,
         }
     }
 }
@@ -319,7 +321,10 @@ impl WatchEngine {
                 }
             };
             let cursor = self.cursors.entry(job.id).or_default();
-            append_log(cursor, &chunk, limit);
+            match &self.config.log_grep {
+                Some(grep) => append_log_matching(cursor, &chunk, limit, grep),
+                None => append_log(cursor, &chunk, limit),
+            }
             let lines = display_lines(cursor, limit);
             if !lines.is_empty() {
                 out.push(JobLog {

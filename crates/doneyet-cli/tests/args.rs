@@ -56,6 +56,30 @@ fn watch_logs_flag_accepts_an_explicit_count() {
 }
 
 #[test]
+fn grep_requires_logs() {
+    use clap::Parser;
+    use doneyet_cli::Cli;
+
+    let err = Cli::try_parse_from(["doneyet", "watch", "acme/api", "--grep", "error"]);
+    assert!(err.is_err(), "--grep must require --logs");
+}
+
+#[test]
+fn grep_parses_alongside_logs() {
+    use clap::Parser;
+    use doneyet_cli::{Cli, Command};
+
+    let cli = Cli::parse_from(["doneyet", "watch", "acme/api", "--logs", "--grep", "error"]);
+    match cli.command {
+        Command::Watch { logs, grep, .. } => {
+            assert_eq!(logs, Some(20));
+            assert_eq!(grep.as_deref(), Some("error"));
+        }
+        other => panic!("expected watch, got {other:?}"),
+    }
+}
+
+#[test]
 fn dash_is_a_subcommand_not_a_repo() {
     let out = inject_default_subcommand(vec!["doneyet".to_string(), "dash".to_string()]);
     assert_eq!(out, vec!["doneyet".to_string(), "dash".to_string()]);

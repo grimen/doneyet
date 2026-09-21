@@ -1,4 +1,4 @@
-use doneyet_core::logtail::{LogCursor, append_log, display_lines};
+use doneyet_core::logtail::{LogCursor, append_log, append_log_matching, display_lines};
 use doneyet_core::ports::LogChunk;
 
 fn chunk(bytes: &str, next_offset: u64) -> LogChunk {
@@ -42,4 +42,42 @@ fn replaced_log_resets_the_cursor() {
     assert_eq!(cursor.offset, 4);
     assert_eq!(cursor.lines, vec!["new".to_string()]);
     assert!(cursor.pending.is_empty());
+}
+
+#[test]
+fn grep_keeps_only_matching_lines() {
+    let mut cursor = LogCursor::default();
+    append_log_matching(
+        &mut cursor,
+        &chunk("error: boom\nok\nerror: two\n", 24),
+        20,
+        "error",
+    );
+    assert_eq!(
+        cursor.lines,
+        vec!["error: boom".to_string(), "error: two".to_string()]
+    );
+}
+
+#[test]
+fn grep_cap_counts_only_matching_lines() {
+    let mut cursor = LogCursor::default();
+    append_log_matching(
+        &mut cursor,
+        &chunk("a error 1\nnoise\nb error 2\nnoise\nc error 3\n", 35),
+        2,
+        "error",
+    );
+    assert_eq!(
+        cursor.lines,
+        vec!["b error 2".to_string(), "c error 3".to_string()]
+    );
+}
+
+#[test]
+fn grep_without_matches_yields_no_lines() {
+    let mut cursor = LogCursor::default();
+    append_log_matching(&mut cursor, &chunk("all quiet\n", 10), 20, "error");
+    assert!(cursor.lines.is_empty());
+    assert!(display_lines(&cursor, 20).is_empty());
 }
