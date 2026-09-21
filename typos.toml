@@ -1,0 +1,10 @@
+[default.extend-words]
+doneyet = "doneyet"
+smee = "smee"
+GHES = "GHES"
+
+[files]
+extend-exclude = [
+  "crates/doneyet-ux/tests/snapshots/*",
+  "crates/doneyet-contract/fixtures/*",
+]
