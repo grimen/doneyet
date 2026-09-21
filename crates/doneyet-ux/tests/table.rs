@@ -65,6 +65,22 @@ fn runs_table_lists_ids_and_branches_within_width() {
 }
 
 #[test]
+fn board_frame_counts_in_progress_runs() {
+    let page = RunsPage {
+        total_count: 3,
+        runs: vec![
+            run(3, 3, Phase::InProgress, "main", "building"),
+            run(2, 2, Phase::Queued, "main", "queued"),
+            run(1, 1, Phase::Done(Conclusion::Success), "main", "done"),
+        ],
+    };
+    let frame = doneyet_ux::board_frame(&page, false, 80, ts("2026-09-21T10:05:00Z"));
+    let header = frame.lines().next().expect("header");
+    assert_eq!(header, "2 running · 3 shown");
+    assert!(frame.contains("#3"), "{frame}");
+}
+
+#[test]
 fn runs_table_color_mode_emits_ansi() {
     let page = RunsPage {
         total_count: 1,

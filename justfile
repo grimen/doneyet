@@ -31,3 +31,6 @@ watch repo="acme/api" *args:
 
 runs repo="acme/api" *args:
     cargo run -q -p doneyet-cli -- runs {{repo}} {{args}}
+
+dash repo="acme/api" *args:
+    cargo run -q -p doneyet-cli -- dash {{repo}} {{args}}

@@ -1,6 +1,6 @@
 pub mod engine;
 
 pub use engine::{
-    ChannelPushSource, EngineError, NoopPushSource, WatchConfig, WatchEngine, WatchOutcome,
-    WatchTarget,
+    BoardSink, ChannelPushSource, DashConfig, DashEngine, DashOutcome, EngineError, NoopPushSource,
+    WatchConfig, WatchEngine, WatchOutcome, WatchTarget,
 };

@@ -480,3 +480,165 @@ async fn closed_channel_push_degrades_to_polling() {
         WatchOutcome::Completed(Conclusion::Success)
     ));
 }
+
+struct PageSink {
+    pages: std::sync::Arc<std::sync::Mutex<Vec<doneyet_core::model::RunsPage>>>,
+    cancel: CancellationToken,
+    stop_after: usize,
+}
+
+impl doneyet_app::BoardSink for PageSink {
+    fn render_page(
+        &mut self,
+        page: &doneyet_core::model::RunsPage,
+    ) -> Result<(), doneyet_core::ports::RenderError> {
+        let mut pages = self.pages.lock().expect("pages poisoned");
+        pages.push(page.clone());
+        if pages.len() >= self.stop_after {
+            self.cancel.cancel();
+        }
+        Ok(())
+    }
+}
+
+fn dash_query() -> RunsQuery {
+    RunsQuery {
+        repo: repo(),
+        branch: None,
+        head_sha: None,
+        event: None,
+        limit: 5,
+    }
+}
+
+fn dash_config() -> doneyet_app::DashConfig {
+    doneyet_app::DashConfig {
+        interval: Duration::from_secs(3),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn dash_renders_each_page_until_cancel() {
+    use doneyet_app::{DashEngine, DashOutcome};
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(terminal_world()),
+    ]);
+    let pages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: pages.clone(),
+        cancel: shutdown.clone(),
+        stop_after: 2,
+    };
+    let mut engine = DashEngine::new(
+        Box::new(provider),
+        Box::new(NoopPushSource),
+        dash_config(),
+        shutdown,
+    );
+    let outcome = engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect("cancel is not an error");
+    assert!(matches!(outcome, DashOutcome::Interrupted));
+    assert_eq!(outcome.exit_code(), 130);
+    let rendered = pages.lock().expect("pages poisoned");
+    assert_eq!(rendered.len(), 2);
+    assert_eq!(rendered[0].runs[0].id, 2841);
+    assert!(rendered[1].runs[0].phase.is_terminal());
+}
+
+#[tokio::test(start_paused = true)]
+async fn dash_hint_preempts_interval() {
+    use doneyet_app::{ChannelPushSource, DashEngine};
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+    ]);
+    let handle = provider.handle();
+    let (hints, push) = ChannelPushSource::channel();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let _ = hints.send(hint());
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let _ = hints;
+    });
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        cancel: shutdown.clone(),
+        stop_after: 2,
+    };
+    let mut engine = DashEngine::new(Box::new(provider), Box::new(push), dash_config(), shutdown);
+    engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect("cancel is not an error");
+    let calls = handle.locate_calls();
+    assert_eq!(calls.len(), 2);
+    let gap = calls[1] - calls[0];
+    assert!(
+        gap < Duration::from_secs(1),
+        "hint must preempt the interval, gap was {gap:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dash_closed_channel_falls_back_to_polling() {
+    use doneyet_app::{ChannelPushSource, DashEngine, DashOutcome};
+
+    let provider = FakeProvider::new(vec![
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+        Step0::World(active_world()),
+    ]);
+    let handle = provider.handle();
+    let (hints, push) = ChannelPushSource::channel();
+    drop(hints);
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        cancel: shutdown.clone(),
+        stop_after: 3,
+    };
+    let mut engine = DashEngine::new(Box::new(provider), Box::new(push), dash_config(), shutdown);
+    let outcome = engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect("a closed push channel must not kill the board");
+    assert!(matches!(outcome, DashOutcome::Interrupted));
+    let calls = handle.locate_calls();
+    assert_eq!(calls.len(), 3);
+    assert!(
+        calls[2] - calls[1] >= Duration::from_secs(3),
+        "after the channel closes, the next refresh must wait out the interval"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dash_provider_error_aborts() {
+    use doneyet_app::DashEngine;
+
+    let provider = FakeProvider::new(vec![Step0::Fail("boom".to_string())]);
+    let shutdown = CancellationToken::new();
+    let mut sink = PageSink {
+        pages: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        cancel: shutdown.clone(),
+        stop_after: 1,
+    };
+    let mut engine = DashEngine::new(
+        Box::new(provider),
+        Box::new(NoopPushSource),
+        dash_config(),
+        shutdown,
+    );
+    let error = engine
+        .run(dash_query(), &mut sink)
+        .await
+        .expect_err("provider failure aborts");
+    assert!(error.to_string().contains("boom"), "{error}");
+    assert!(sink.pages.lock().expect("pages poisoned").is_empty());
+}

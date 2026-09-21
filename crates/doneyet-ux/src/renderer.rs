@@ -136,25 +136,8 @@ impl TermRenderer {
     }
 
     fn write_frame(&mut self, text: &str) -> RenderResult<()> {
-        let lines: Vec<&str> = text.lines().collect();
-        let redrawing = self.last_lines > 0;
-        let mut out = String::new();
-        if redrawing {
-            out.push_str(&format!("\x1b[{}F", self.last_lines));
-        }
-        for line in &lines {
-            out.push_str(line);
-            if redrawing {
-                out.push_str("\x1b[K");
-            }
-            out.push('\n');
-        }
-        if self.last_lines > lines.len() {
-            for _ in lines.len()..self.last_lines {
-                out.push_str("\x1b[K\n");
-            }
-        }
-        self.last_lines = lines.len();
+        let (out, next) = inline_frame(self.last_lines, text);
+        self.last_lines = next;
         self.writer
             .write_all(out.as_bytes())
             .and_then(|_| self.writer.flush())
@@ -186,6 +169,71 @@ pub fn stdout_color() -> bool {
         return true;
     }
     std::io::stdout().is_terminal()
+}
+
+pub fn board_frame(page: &RunsPage, color: bool, width: usize, now: Timestamp) -> String {
+    board_frame_with(page, &Theme::default(), color, width, now)
+}
+
+pub fn board_frame_with(
+    page: &RunsPage,
+    theme: &Theme,
+    color: bool,
+    width: usize,
+    now: Timestamp,
+) -> String {
+    let running = page.runs.iter().filter(|run| run.phase.is_active()).count();
+    let shown = page.runs.len();
+    let header = format!("{running} running · {shown} shown");
+    let table = runs_table_with(page, theme, color, width, now);
+    if table.is_empty() {
+        header
+    } else {
+        format!("{header}\n{table}")
+    }
+}
+
+pub fn inline_frame(previous_lines: usize, text: &str) -> (String, usize) {
+    let lines: Vec<&str> = text.lines().collect();
+    let redrawing = previous_lines > 0;
+    let mut out = String::new();
+    if redrawing {
+        out.push_str(&format!("\x1b[{previous_lines}F"));
+    }
+    for line in &lines {
+        out.push_str(line);
+        if redrawing {
+            out.push_str("\x1b[K");
+        }
+        out.push('\n');
+    }
+    if previous_lines > lines.len() {
+        for _ in lines.len()..previous_lines {
+            out.push_str("\x1b[K\n");
+        }
+    }
+    (out, lines.len())
+}
+
+pub struct InlineRedraw<W: Write> {
+    writer: W,
+    last_lines: usize,
+}
+
+impl<W: Write> InlineRedraw<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer,
+            last_lines: 0,
+        }
+    }
+
+    pub fn write_frame(&mut self, text: &str) -> std::io::Result<()> {
+        let (out, next) = inline_frame(self.last_lines, text);
+        self.last_lines = next;
+        self.writer.write_all(out.as_bytes())?;
+        self.writer.flush()
+    }
 }
 
 pub fn runs_table(page: &RunsPage, color: bool, width: usize, now: Timestamp) -> String {

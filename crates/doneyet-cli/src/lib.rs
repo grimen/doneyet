@@ -2,8 +2,10 @@ pub mod keys;
 pub mod repo;
 
 use clap::{Args, Parser, Subcommand};
-use doneyet_app::{WatchConfig, WatchEngine, WatchTarget};
-use doneyet_core::model::{Outcome, Phase, RepoRef, RunsQuery, World};
+use doneyet_app::{
+    BoardSink, ChannelPushSource, DashConfig, DashEngine, WatchConfig, WatchEngine, WatchTarget,
+};
+use doneyet_core::model::{Outcome, Phase, RepoRef, RunsPage, RunsQuery, World};
 use doneyet_core::ports::{AnnotationSource, PushSource, Renderer, RunSource};
 use doneyet_github::{GithubConfig, GithubProvider};
 use doneyet_ux::{TermRenderer, stdout_color};
@@ -48,6 +50,21 @@ pub enum Command {
         webhook_secret: Option<String>,
         #[arg(long, help = "Record every rendered frame to PATH as JSONL")]
         record: Option<String>,
+        #[command(flatten)]
+        common: CommonArgs,
+    },
+    /// Live table of recent runs until quit
+    Dash {
+        #[arg(help = "OWNER/NAME; defaults to the origin remote of the current directory")]
+        repo: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        #[arg(short, long)]
+        branch: Option<String>,
+        #[arg(long)]
+        event: Option<String>,
+        #[arg(long, default_value_t = 5)]
+        interval: u64,
         #[command(flatten)]
         common: CommonArgs,
     },
@@ -114,10 +131,11 @@ fn resolve_theme(common: &CommonArgs) -> anyhow::Result<doneyet_ux::Theme> {
     doneyet_ux::load_theme(&common.theme).map_err(|error| anyhow::anyhow!("{error}"))
 }
 
-const KNOWN_SUBCOMMANDS: [&str; 8] = [
+const KNOWN_SUBCOMMANDS: [&str; 9] = [
     "watch",
     "runs",
     "run",
+    "dash",
     "help",
     "--help",
     "-h",
@@ -177,6 +195,14 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             )
             .await
         }
+        Command::Dash {
+            repo,
+            limit,
+            branch,
+            event,
+            interval,
+            common,
+        } => dash(repo, limit, branch, event, interval, common).await,
         Command::Runs {
             repo,
             limit,
@@ -342,6 +368,79 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     };
     let mut engine = WatchEngine::new(repo, Box::new(provider), renderer, push, config, shutdown);
     let outcome = engine.watch(WatchTarget::Latest(query)).await?;
+    drop(raw_mode);
+    Ok(outcome.exit_code() as u32)
+}
+
+struct BoardView {
+    redraw: doneyet_ux::InlineRedraw<Box<dyn std::io::Write + Send>>,
+    theme: doneyet_ux::Theme,
+    color: bool,
+    width: usize,
+    now: Box<dyn Fn() -> jiff::Timestamp + Send>,
+}
+
+impl BoardSink for BoardView {
+    fn render_page(&mut self, page: &RunsPage) -> Result<(), doneyet_core::ports::RenderError> {
+        let text =
+            doneyet_ux::board_frame_with(page, &self.theme, self.color, self.width, (self.now)());
+        self.redraw
+            .write_frame(&text)
+            .map_err(|error| doneyet_core::ports::RenderError(error.to_string()))
+    }
+}
+
+async fn dash(
+    repo_arg: Option<String>,
+    limit: u32,
+    branch: Option<String>,
+    event: Option<String>,
+    interval: u64,
+    common: CommonArgs,
+) -> anyhow::Result<u32> {
+    let repo = repo::resolve(repo_arg.as_deref())?;
+    let query = RunsQuery {
+        repo: repo.clone(),
+        branch,
+        head_sha: None,
+        event,
+        limit,
+    };
+    let provider = build_provider(repo.clone(), &common)?;
+    let (hint_tx, push) = ChannelPushSource::channel();
+    let shutdown = CancellationToken::new();
+    let cancel = shutdown.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            cancel.cancel();
+        }
+    });
+    let raw_mode = keys::RawModeGuard::enable();
+    if raw_mode.is_some() {
+        eprintln!("(q quit · r refresh)");
+        keys::spawn(repo, shutdown.clone(), hint_tx);
+    }
+    let stdout: Box<dyn std::io::Write + Send> = if raw_mode.is_some() {
+        Box::new(doneyet_ux::writer::CrLfWriter::new(std::io::stdout()))
+    } else {
+        Box::new(std::io::stdout())
+    };
+    let mut view = BoardView {
+        redraw: doneyet_ux::InlineRedraw::new(stdout),
+        theme: resolve_theme(&common)?,
+        color: color_enabled(&common),
+        width: terminal_width(&common),
+        now: Box::new(jiff::Timestamp::now),
+    };
+    let mut engine = DashEngine::new(
+        Box::new(provider),
+        Box::new(push),
+        DashConfig {
+            interval: Duration::from_secs(interval.max(1)),
+        },
+        shutdown,
+    );
+    let outcome = engine.run(query, &mut view).await?;
     drop(raw_mode);
     Ok(outcome.exit_code() as u32)
 }

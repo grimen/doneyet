@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use doneyet_core::diff::diff_worlds;
-use doneyet_core::model::{Conclusion, Outcome, Phase, RepoRef, RunsQuery, WorkflowRun, World};
+use doneyet_core::model::{
+    Conclusion, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
+};
 use doneyet_core::ports::{
     ProviderError, PushSource, RefreshHint, RenderError, Renderer, RunSource,
 };
@@ -79,6 +81,95 @@ impl PushSource for ChannelPushSource {
             .recv()
             .await
             .ok_or_else(|| ProviderError::Other("push channel closed".to_string()))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DashConfig {
+    pub interval: Duration,
+}
+
+impl Default for DashConfig {
+    fn default() -> Self {
+        Self {
+            interval: Duration::from_secs(5),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DashOutcome {
+    Interrupted,
+}
+
+impl DashOutcome {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            DashOutcome::Interrupted => 130,
+        }
+    }
+}
+
+pub trait BoardSink: Send {
+    fn render_page(&mut self, page: &RunsPage) -> Result<(), RenderError>;
+}
+
+pub struct DashEngine {
+    provider: Box<dyn RunSource>,
+    push: Box<dyn PushSource>,
+    push_dead: bool,
+    config: DashConfig,
+    shutdown: CancellationToken,
+}
+
+impl DashEngine {
+    pub fn new(
+        provider: Box<dyn RunSource>,
+        push: Box<dyn PushSource>,
+        config: DashConfig,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self {
+            provider,
+            push,
+            push_dead: false,
+            config,
+            shutdown,
+        }
+    }
+
+    pub async fn run(
+        &mut self,
+        query: RunsQuery,
+        sink: &mut dyn BoardSink,
+    ) -> Result<DashOutcome, EngineError> {
+        loop {
+            if self.shutdown.is_cancelled() {
+                return Ok(DashOutcome::Interrupted);
+            }
+            let page = self.provider.list_runs(&query).await?;
+            sink.render_page(&page)?;
+            if self.wait_tick().await {
+                return Ok(DashOutcome::Interrupted);
+            }
+        }
+    }
+
+    async fn wait_tick(&mut self) -> bool {
+        tokio::select! {
+            _ = tokio::time::sleep(self.config.interval) => false,
+            hint = self.push.wait(), if !self.push_dead => {
+                match hint {
+                    Ok(_) => false,
+                    Err(error) => {
+                        tracing::warn!("push source failed ({error}); continuing with polling only");
+                        self.push_dead = true;
+                        false
+                    }
+                }
+            }
+            _ = self.shutdown.cancelled() => true,
+        }
     }
 }
 

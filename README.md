@@ -15,8 +15,17 @@ doneyet run 2841 --logs-failed [N]   # …and the last N log lines of failed job
 Exit code equals the run conclusion: `0` pass, `1` fail, `2` cancelled/timeout,
 `130` interrupted.
 
-On a terminal, `watch` reads keys: `q` or `Esc` quits, `r` refreshes now,
-`Ctrl-C` still interrupts. Piped or non-tty stdout stays in normal mode.
+On a terminal, `watch` and `dash` read keys: `q` or `Esc` quits, `r` refreshes
+now, `Ctrl-C` still interrupts. Piped or non-tty stdout stays in normal mode.
+
+## Dashboard
+
+`doneyet dash` live-updates the recent-runs table until you quit. It only
+lists runs — no per-run job fetch — and exits `130`.
+
+```
+doneyet dash acme/api --limit 20 --interval 5
+```
 
 ## Webhook mode (instant refresh)
 
@@ -102,6 +111,8 @@ Milestone 6 complete — all planned MVP milestones shipped:
   While a run is in progress the header shows an ETA
   (`3m12s (~1m28s left)`) derived from the median duration of recent
   runs of the same workflow
+- `doneyet dash [OWNER/NAME] [--limit N] [--interval N]` — live recent-runs
+  table until quit (`q` / `Esc` / `Ctrl-C`, exit `130`)
 - `doneyet runs [OWNER/NAME] [--limit N]` — colorful recent-runs table
 - `doneyet run <ID> [--repo OWNER/NAME]` — static single-run view + exit code
 - bare `doneyet OWNER/NAME` is shorthand for `watch`
@@ -116,6 +127,7 @@ webhook push source with HMAC validation (unit + end-to-end tested).
 
 Roadmap: TUI/GUI frontends on the same `Renderer` port, more CI providers on
 the `RunSource` capability traits — the `doneyet-contract` suite is provider-agnostic.
+The live runs board is `doneyet dash`.
 
 ## Architecture
 

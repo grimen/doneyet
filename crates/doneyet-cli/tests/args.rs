@@ -32,8 +32,14 @@ fn bare_repo_arg_with_flags_becomes_watch() {
 }
 
 #[test]
+fn dash_is_a_subcommand_not_a_repo() {
+    let out = inject_default_subcommand(vec!["doneyet".to_string(), "dash".to_string()]);
+    assert_eq!(out, vec!["doneyet".to_string(), "dash".to_string()]);
+}
+
+#[test]
 fn known_subcommands_are_untouched() {
-    for arg in ["watch", "runs", "run", "help", "--version"] {
+    for arg in ["watch", "runs", "run", "dash", "help", "--version"] {
         let out = inject_default_subcommand(vec!["doneyet".to_string(), arg.to_string()]);
         assert_eq!(out, vec!["doneyet".to_string(), arg.to_string()], "{arg}");
     }
