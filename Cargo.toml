@@ -42,3 +42,8 @@ wiremock = "0.6"
 
 [profile.release]
 lto = "thin"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

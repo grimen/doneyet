@@ -2,8 +2,21 @@
 
 > exits when it's done yet.
 
+[![ci](https://github.com/grimen/doneyet/actions/workflows/ci.yml/badge.svg)](https://github.com/grimen/doneyet/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/grimen/doneyet)](https://github.com/grimen/doneyet/releases/latest)
+
 A realtime, colorful terminal watcher for CI/CD workflow runs — GitHub Actions
 today, other providers tomorrow.
+
+## Install
+
+From a release (linux x86_64):
+
+```
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/grimen/doneyet/releases/latest/download/doneyet-cli-installer.sh | sh
+```
+
+Or from source: `cargo install --git https://github.com/grimen/doneyet doneyet-cli`.
 
 ```
 doneyet acme/api        # watch the latest run live (alias for `doneyet watch`)
