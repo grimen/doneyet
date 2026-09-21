@@ -1,0 +1,37 @@
+{
+  "total_count": 2,
+  "workflow_runs": [
+    {
+      "id": 2842,
+      "run_number": 2842,
+      "name": "ci.yml",
+      "display_title": "Add retry logic",
+      "head_branch": "feat/retries",
+      "head_sha": "def4560000000000000000000000000000000000",
+      "event": "pull_request",
+      "status": "in_progress",
+      "conclusion": null,
+      "actor": { "login": "jonas" },
+      "html_url": "https://github.com/acme/api/actions/runs/2842",
+      "created_at": "2026-09-21T11:00:00Z",
+      "run_started_at": "2026-09-21T11:00:01Z",
+      "updated_at": "2026-09-21T11:00:30Z"
+    },
+    {
+      "id": 2841,
+      "run_number": 2841,
+      "name": "ci.yml",
+      "display_title": "build & test",
+      "head_branch": "main",
+      "head_sha": "abc1230000000000000000000000000000000000",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "actor": { "login": "jonas" },
+      "html_url": "https://github.com/acme/api/actions/runs/2841",
+      "created_at": "2026-09-21T10:00:00Z",
+      "run_started_at": "2026-09-21T10:00:01Z",
+      "updated_at": "2026-09-21T10:03:00Z"
+    }
+  ]
+}

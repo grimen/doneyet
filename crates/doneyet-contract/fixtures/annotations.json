@@ -1,0 +1,14 @@
+[
+  {
+    "path": "src/lib.rs",
+    "start_line": 42,
+    "annotation_level": "warning",
+    "message": "unused variable: `x`"
+  },
+  {
+    "path": null,
+    "start_line": null,
+    "annotation_level": "failure",
+    "message": "process exited with code 1"
+  }
+]

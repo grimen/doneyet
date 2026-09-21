@@ -1,0 +1,21 @@
+{
+  "total_count": 2,
+  "workflow_runs": [
+    {
+      "id": 2840,
+      "run_number": 2840,
+      "name": "ci.yml",
+      "display_title": "Fix flaky test",
+      "head_branch": "main",
+      "head_sha": "789abc0000000000000000000000000000000000",
+      "event": "push",
+      "status": "completed",
+      "conclusion": "failure",
+      "actor": { "login": "jonas" },
+      "html_url": "https://github.com/acme/api/actions/runs/2840",
+      "created_at": "2026-09-21T09:00:00Z",
+      "run_started_at": "2026-09-21T09:00:01Z",
+      "updated_at": "2026-09-21T09:04:00Z"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "total_count": 2,
+  "jobs": [
+    {
+      "id": 399444496,
+      "run_id": 2841,
+      "status": "completed",
+      "conclusion": "success",
+      "name": "build (ubuntu-latest)",
+      "started_at": "2026-09-21T10:00:02Z",
+      "completed_at": "2026-09-21T10:01:30Z",
+      "runner_name": "gh-runner-01",
+      "labels": ["ubuntu-latest", "x64"],
+      "steps": [
+        {
+          "name": "Set up job",
+          "number": 1,
+          "status": "completed",
+          "conclusion": "success",
+          "started_at": "2026-09-21T10:00:03Z",
+          "completed_at": "2026-09-21T10:00:05Z"
+        },
+        {
+          "name": "Run cargo test",
+          "number": 2,
+          "status": "completed",
+          "conclusion": "failure",
+          "started_at": "2026-09-21T10:00:06Z",
+          "completed_at": "2026-09-21T10:00:20Z"
+        },
+        {
+          "name": "Deploy",
+          "number": 3,
+          "status": "completed",
+          "conclusion": "skipped",
+          "started_at": null,
+          "completed_at": null
+        }
+      ]
+    },
+    {
+      "id": 399444497,
+      "run_id": 2841,
+      "status": "in_progress",
+      "conclusion": null,
+      "name": "test (macos-latest)",
+      "started_at": "2026-09-21T10:01:31Z",
+      "completed_at": null,
+      "runner_name": null,
+      "labels": ["macos-latest"],
+      "steps": [
+        {
+          "name": "Set up job",
+          "number": 1,
+          "status": "in_progress",
+          "conclusion": null,
+          "started_at": "2026-09-21T10:01:32Z",
+          "completed_at": null
+        }
+      ]
+    }
+  ]
+}
