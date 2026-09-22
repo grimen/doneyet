@@ -217,3 +217,62 @@ fn unparseable_remote_errors_with_context() {
         .expect_err("garbage remote");
     assert!(err.to_string().contains("could not derive"), "{err}");
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run git");
+    assert!(output.status.success(), "git {args:?} failed: {output:?}");
+}
+
+#[test]
+fn detect_branch_in_reads_the_current_git_branch() {
+    let dir = std::env::temp_dir().join(format!("doneyet-detect-branch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp repo dir");
+    git(&dir, &["init"]);
+    git(&dir, &["symbolic-ref", "HEAD", "refs/heads/feature/xyz"]);
+    assert_eq!(
+        repo::detect_branch_in(&dir),
+        Some("feature/xyz".to_string())
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn detect_branch_in_returns_none_outside_a_git_checkout() {
+    let dir = std::env::temp_dir().join(format!("doneyet-detect-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let nested = dir.join("nested");
+    std::fs::create_dir_all(&nested).expect("create plain dir");
+    assert_eq!(repo::detect_branch_in(&nested), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn detect_branch_in_returns_none_on_detached_head() {
+    let dir = std::env::temp_dir().join(format!("doneyet-detect-detached-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp repo dir");
+    git(&dir, &["init"]);
+    git(
+        &dir,
+        &[
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=test",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+    );
+    git(&dir, &["checkout", "--detach"]);
+    assert_eq!(repo::detect_branch_in(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}

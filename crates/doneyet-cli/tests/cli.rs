@@ -65,6 +65,34 @@ async fn runs_command_lists_runs_and_exits_zero() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runs_with_explicit_branch_still_queries_that_branch() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .and(wiremock::matchers::query_param("branch", "feat/explicit"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(doneyet_contract::fixtures::RUNS_PAGE),
+        )
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "runs",
+            "acme/api",
+            "--branch",
+            "feat/explicit",
+            "--api-base",
+            &server.uri(),
+        ])
+        .output()
+        .expect("run binary");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#2841"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn run_command_exits_zero_on_success_conclusion() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

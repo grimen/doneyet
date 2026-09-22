@@ -477,6 +477,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
     let interval = file_config.interval_or(opts.interval, 3).max(1);
     let notify = file_config.notify_or(opts.notify);
     let repo = repo::resolve(opts.repo.as_deref())?;
+    let detected_branch = repo::detect_branch();
     let provider = build_provider(repo.clone(), &common, &file_config)?;
     let (hint_tx, channel_push) = doneyet_app::ChannelPushSource::channel();
     let push: Box<dyn doneyet_core::ports::PushSource> = match (opts.webhook, opts.webhook_secret) {
@@ -543,7 +544,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         };
         let query = RunsQuery {
             repo: repo.clone(),
-            branch: opts.branch.clone(),
+            branch: opts.branch.clone().or(detected_branch.clone()),
             head_sha: Some(sha.clone()),
             event: None,
             limit: 20,
@@ -563,7 +564,7 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
             Some(id) => WatchTarget::Run(id),
             None => WatchTarget::Latest(RunsQuery {
                 repo: repo.clone(),
-                branch: opts.branch,
+                branch: opts.branch.or(detected_branch),
                 head_sha: opts.commit,
                 event: None,
                 limit: 1,
@@ -630,9 +631,10 @@ async fn dash(
     let config = config::Config::load()?;
     let interval = config.interval_or(interval, 5).max(1);
     let repo = repo::resolve(repo_arg.as_deref())?;
+    let detected_branch = repo::detect_branch();
     let query = RunsQuery {
         repo: repo.clone(),
-        branch,
+        branch: branch.or(detected_branch),
         head_sha: None,
         event,
         limit,
@@ -686,10 +688,11 @@ async fn list_runs(
 ) -> anyhow::Result<u32> {
     let config = config::Config::load()?;
     let repo = repo::resolve(repo_arg.as_deref())?;
+    let detected_branch = repo::detect_branch();
     let provider = build_provider(repo.clone(), &common, &config)?;
     let query = RunsQuery {
         repo,
-        branch,
+        branch: branch.or(detected_branch),
         head_sha: None,
         event,
         limit,

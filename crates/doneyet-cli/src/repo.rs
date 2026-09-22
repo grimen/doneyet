@@ -29,6 +29,21 @@ fn fetch_origin_remote() -> Option<String> {
         .filter(|url| !url.is_empty())
 }
 
+pub fn detect_branch() -> Option<String> {
+    detect_branch_in(std::env::current_dir().ok()?.as_path())
+}
+
+pub fn detect_branch_in(dir: &std::path::Path) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|branch| !branch.is_empty())
+}
+
 pub fn from_remote_url(url: &str) -> Option<RepoRef> {
     let trimmed = url.trim().trim_end_matches(".git");
     let path = if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
