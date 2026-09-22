@@ -42,6 +42,53 @@ fn completions_zsh_exits_zero_and_mentions_doneyet() {
     assert!(stdout.contains("doneyet"), "{stdout}");
 }
 
+#[test]
+fn completions_install_writes_file_and_prints_instruction() {
+    let dir = std::env::temp_dir().join(format!("doneyet-install-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let output = doneyet()
+        .args(["completions", "bash", "--install"])
+        .env("DONEYET_COMPLETIONS_DIR", &dir)
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let file = dir.join("doneyet.bash");
+    let contents = std::fs::read_to_string(&file).expect("completion file exists");
+    assert!(
+        !contents.trim().is_empty(),
+        "completion file must be non-empty"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&dir.display().to_string()), "{stdout}");
+    assert!(stdout.contains("source"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn completions_without_install_prints_to_stdout() {
+    let dir = std::env::temp_dir().join(format!("doneyet-uninstalled-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp completions dir");
+    let output = doneyet()
+        .args(["completions", "fish"])
+        .env("DONEYET_COMPLETIONS_DIR", &dir)
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "stdout must carry the completion script"
+    );
+    assert!(stdout.contains("doneyet"), "{stdout}");
+    let mut entries = dir.read_dir().expect("dir readable");
+    assert!(
+        entries.next().is_none(),
+        "--install is what writes files; the completions dir must stay empty"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn runs_command_lists_runs_and_exits_zero() {
     let server = MockServer::start().await;

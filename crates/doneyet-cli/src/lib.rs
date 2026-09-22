@@ -1,3 +1,4 @@
+pub mod completions;
 pub mod config;
 pub mod keys;
 pub mod notify;
@@ -204,7 +205,14 @@ pub enum Command {
         common: CommonArgs,
     },
     /// Generate shell completions
-    Completions { shell: clap_complete::Shell },
+    Completions {
+        shell: clap_complete::Shell,
+        #[arg(
+            long,
+            help = "Write the completion file into the completions directory and print the enable instructions (default: print the script to stdout)"
+        )]
+        install: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -356,13 +364,20 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             realtime,
             common,
         } => replay_file(path, realtime, common).await,
-        Command::Completions { shell } => {
-            clap_complete::generate(
-                shell,
-                &mut <Cli as clap::CommandFactory>::command(),
-                "doneyet",
-                &mut std::io::stdout(),
-            );
+        Command::Completions { shell, install } => {
+            if install {
+                let dir = completions::install_dir()?;
+                let file = completions::install(shell, &dir)?;
+                println!("doneyet: wrote {}", file.display());
+                println!("{}", completions::enable_instruction(&shell, &file));
+            } else {
+                clap_complete::generate(
+                    shell,
+                    &mut <Cli as clap::CommandFactory>::command(),
+                    "doneyet",
+                    &mut std::io::stdout(),
+                );
+            }
             Ok(0)
         }
     }
