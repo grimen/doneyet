@@ -18,6 +18,12 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/grimen/doneyet/releases
 
 Or from source: `cargo install --git https://github.com/grimen/doneyet doneyet-cli`.
 
+Via Homebrew:
+
+```
+brew tap grimen/doneyet && brew install doneyet
+```
+
 ```
 doneyet acme/api        # watch the latest run live (alias for `doneyet watch`)
 doneyet runs acme/api   # list recent runs
