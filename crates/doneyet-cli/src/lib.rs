@@ -1,5 +1,6 @@
 pub mod completions;
 pub mod config;
+mod hooks;
 pub mod keys;
 pub mod notify;
 pub mod repo;
@@ -107,13 +108,23 @@ pub enum Command {
         notify: bool,
         #[arg(
             long,
+            help = "Run a shell command when the watch finishes with a passing run"
+        )]
+        on_success: Option<String>,
+        #[arg(
+            long,
+            help = "Run a shell command when the watch finishes with a failing run"
+        )]
+        on_failure: Option<String>,
+        #[arg(
+            long,
             value_enum,
             default_value_t = OutFormat::Term,
             help = "Output format: term renders a live view, json emits JSONL records to stdout"
         )]
         format: OutFormat,
         #[command(flatten)]
-        common: CommonArgs,
+        common: Box<CommonArgs>,
     },
     /// Live table of recent runs until quit
     Dash {
@@ -318,6 +329,8 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             grep,
             job,
             notify,
+            on_success,
+            on_failure,
             format,
             common,
         } => {
@@ -337,9 +350,11 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     grep,
                     job,
                     notify,
+                    on_success,
+                    on_failure,
                     format,
                 },
-                common,
+                *common,
             )
             .await
         }
@@ -501,6 +516,8 @@ struct WatchOptions {
     grep: Option<String>,
     job: Option<String>,
     notify: bool,
+    on_success: Option<String>,
+    on_failure: Option<String>,
     format: OutFormat,
 }
 
@@ -645,6 +662,13 @@ async fn watch(opts: WatchOptions, common: CommonArgs) -> anyhow::Result<u32> {
         }
     }
     drop(raw_mode);
+    if let WatchOutcome::Completed(conclusion) = &outcome {
+        hooks::run(
+            opts.on_success.as_deref(),
+            opts.on_failure.as_deref(),
+            conclusion,
+        );
+    }
     Ok(outcome.exit_code() as u32)
 }
 

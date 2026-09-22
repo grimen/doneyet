@@ -949,6 +949,132 @@ async fn watch_commit_follows_all_workflows_and_exits_worst() {
     assert!(stdout.contains("failure"), "{stdout}");
 }
 
+fn hook_marker(name: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("doneyet-hook-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    path
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_on_success_hook_runs_when_run_passes() {
+    let server = MockServer::start().await;
+    mount_flip_mocks(&server, COMPLETED_RUN_PAGE.to_string()).await;
+    let marker = hook_marker("on-success");
+    let hook = format!("echo ok >> {}", marker.display());
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--on-success",
+            &hook,
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let contents = std::fs::read_to_string(&marker).expect("success hook must write the marker");
+    assert_eq!(contents.trim(), "ok", "{contents}");
+    let _ = std::fs::remove_file(&marker);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_on_failure_hook_runs_when_run_fails_and_not_success() {
+    let server = MockServer::start().await;
+    mount_flip_mocks(&server, COMPLETED_RUN_PAGE.replace("success", "failure")).await;
+    let marker_ok = hook_marker("both-success");
+    let marker_fail = hook_marker("both-failure");
+    let hook_ok = format!("echo yes >> {}", marker_ok.display());
+    let hook_fail = format!("echo no >> {}", marker_fail.display());
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--on-success",
+            &hook_ok,
+            "--on-failure",
+            &hook_fail,
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let contents = std::fs::read_to_string(&marker_fail).expect("failure hook must write markerB");
+    assert_eq!(contents.trim(), "no", "{contents}");
+    assert!(
+        !marker_ok.exists(),
+        "success hook must not run on a failed run"
+    );
+    let _ = std::fs::remove_file(&marker_fail);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_hook_failure_does_not_change_exit_code() {
+    let server = MockServer::start().await;
+    mount_flip_mocks(&server, COMPLETED_RUN_PAGE.to_string()).await;
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--interval",
+            "1",
+            "--on-success",
+            "false",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("hook failed"), "{stderr}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_hooks_do_not_run_on_timeout() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs/2841/jobs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(EMPTY_JOBS))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let marker = hook_marker("timeout");
+    let hook = format!("touch {}", marker.display());
+    let output = doneyet()
+        .args([
+            "watch",
+            "acme/api",
+            "--timeout",
+            "1",
+            "--interval",
+            "1",
+            "--on-success",
+            &hook,
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(!marker.exists(), "hooks must not run on --timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn rerun_requests_rerun_and_exits_zero() {
     let server = MockServer::start().await;
