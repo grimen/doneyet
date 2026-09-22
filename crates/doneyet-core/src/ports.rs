@@ -19,11 +19,15 @@ pub enum ProviderError {
 }
 
 #[async_trait::async_trait]
+pub trait PullRequestSource: Send + Sync {
+    async fn pr_head_sha(&self, number: u64) -> Result<String, ProviderError>;
+}
+
+#[async_trait::async_trait]
 pub trait RunSource: Send + Sync {
     async fn list_runs(&self, query: &RunsQuery) -> Result<RunsPage, ProviderError>;
     async fn get_run(&self, run_id: u64) -> Result<WorkflowRun, ProviderError>;
     async fn list_jobs(&self, run_id: u64) -> Result<Vec<Job>, ProviderError>;
-    async fn pr_head_sha(&self, number: u64) -> Result<String, ProviderError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,9 +61,9 @@ pub trait AnnotationSource: Send + Sync {
     async fn list_annotations(&self, job_id: u64) -> Result<Vec<Annotation>, ProviderError>;
 }
 
-pub trait PipelineProvider: RunSource + LogSource + AnnotationSource {}
+pub trait PipelineProvider: RunSource + LogSource + AnnotationSource + PullRequestSource {}
 
-impl<T> PipelineProvider for T where T: RunSource + LogSource + AnnotationSource {}
+impl<T> PipelineProvider for T where T: RunSource + LogSource + AnnotationSource + PullRequestSource {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("renderer error: {0}")]

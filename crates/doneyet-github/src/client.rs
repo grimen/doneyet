@@ -2,7 +2,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use doneyet_core::model::{Annotation, Job, RepoRef, RunsPage, RunsQuery, WorkflowRun};
-use doneyet_core::ports::{AnnotationSource, LogSource, ProviderError, RunSource, RunWriteSource};
+use doneyet_core::ports::{
+    AnnotationSource, LogSource, ProviderError, PullRequestSource, RunSource, RunWriteSource,
+};
 use reqwest::header::{ACCEPT, AUTHORIZATION, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH};
 use reqwest::{Client, StatusCode, Url};
 
@@ -393,6 +395,10 @@ impl RunSource for GithubProvider {
         }
         Ok(jobs)
     }
+}
+
+#[async_trait::async_trait]
+impl PullRequestSource for GithubProvider {
     async fn pr_head_sha(&self, number: u64) -> Result<String, ProviderError> {
         let url = format!("{}/repos/{}/pulls/{number}", self.base, self.repo);
         let pull: RawPull = self.get_json(&url).await?;

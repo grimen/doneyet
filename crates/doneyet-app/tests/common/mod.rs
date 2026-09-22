@@ -246,7 +246,10 @@ impl RunSource for FakeProvider {
             _ => Ok(Vec::new()),
         }
     }
+}
 
+#[async_trait::async_trait]
+impl doneyet_core::ports::PullRequestSource for FakeProvider {
     async fn pr_head_sha(&self, _number: u64) -> Result<String, ProviderError> {
         Ok("abc123".to_string())
     }

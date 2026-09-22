@@ -9,7 +9,9 @@ use doneyet_app::{
     WatchTarget,
 };
 use doneyet_core::model::{Outcome, Phase, RepoRef, RunsPage, RunsQuery, World};
-use doneyet_core::ports::{AnnotationSource, PushSource, Renderer, RunSource, RunWriteSource};
+use doneyet_core::ports::{
+    AnnotationSource, PullRequestSource, PushSource, Renderer, RunSource, RunWriteSource,
+};
 use doneyet_github::{GithubConfig, GithubProvider};
 use doneyet_ux::{TermRenderer, stdout_color};
 use std::process::ExitCode;
