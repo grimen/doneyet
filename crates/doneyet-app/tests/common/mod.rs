@@ -303,6 +303,35 @@ impl LogSource for FakeProvider {
     }
 }
 
+pub struct RunsOnlyProvider {
+    page: RunsPage,
+}
+
+impl RunsOnlyProvider {
+    pub fn new(page: RunsPage) -> Self {
+        Self { page }
+    }
+}
+
+#[async_trait::async_trait]
+impl RunSource for RunsOnlyProvider {
+    async fn list_runs(&self, _query: &RunsQuery) -> Result<RunsPage, ProviderError> {
+        Ok(self.page.clone())
+    }
+
+    async fn get_run(&self, _run_id: u64) -> Result<WorkflowRun, ProviderError> {
+        self.page
+            .runs
+            .first()
+            .cloned()
+            .ok_or_else(|| ProviderError::NotFound("runs-only provider has no runs".to_string()))
+    }
+
+    async fn list_jobs(&self, _run_id: u64) -> Result<Vec<Job>, ProviderError> {
+        Ok(Vec::new())
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct RecordingRenderer {
     inner: Arc<RecorderInner>,

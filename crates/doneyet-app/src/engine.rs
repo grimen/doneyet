@@ -8,7 +8,8 @@ use doneyet_core::model::{
     Conclusion, Job, JobLog, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
 };
 use doneyet_core::ports::{
-    PipelineProvider, ProviderError, PushSource, RefreshHint, RenderError, Renderer, RunSource,
+    AnnotationSource, LogSource, ProviderError, PushSource, RefreshHint, RenderError, Renderer,
+    RunSource,
 };
 use doneyet_core::stats::WorkflowStats;
 use tokio_util::sync::CancellationToken;
@@ -354,9 +355,13 @@ impl DashEngine {
     }
 }
 
+pub trait WatchSource: RunSource + LogSource + AnnotationSource {}
+
+impl<T> WatchSource for T where T: RunSource + LogSource + AnnotationSource {}
+
 pub struct WatchEngine {
     repo: RepoRef,
-    provider: Box<dyn PipelineProvider>,
+    provider: Box<dyn WatchSource>,
     renderer: Box<dyn Renderer>,
     push: Box<dyn PushSource>,
     push_dead: bool,
@@ -368,7 +373,7 @@ pub struct WatchEngine {
 impl WatchEngine {
     pub fn new(
         repo: RepoRef,
-        provider: Box<dyn PipelineProvider>,
+        provider: Box<dyn WatchSource>,
         renderer: Box<dyn Renderer>,
         push: Box<dyn PushSource>,
         config: WatchConfig,
