@@ -138,6 +138,7 @@ fn known_subcommands_are_untouched() {
         "rerun",
         "cancel",
         "dash",
+        "config",
         "completions",
         "help",
         "--version",

@@ -148,3 +148,105 @@ fn invalid_config_exits_with_error_code() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("invalid config"), "{stderr}");
 }
+
+#[test]
+fn config_path_prints_effective_default() {
+    let home = std::env::temp_dir().join(format!("doneyet-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("create home");
+    let output = Command::cargo_bin("doneyet")
+        .expect("binary")
+        .args(["config", "path"])
+        .env("HOME", &home)
+        .env_remove("DONEYET_CONFIG")
+        .output()
+        .expect("run binary");
+    let _ = std::fs::remove_dir_all(&home);
+    assert!(output.status.success(), "{output:?}");
+    let expected = home.join(".config").join("doneyet").join("config.toml");
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(stdout, expected.to_string_lossy().to_string(), "{output:?}");
+}
+
+#[test]
+fn config_path_uses_doneyet_config_env() {
+    let custom = std::env::temp_dir().join(format!("doneyet-custom-{}.toml", std::process::id()));
+    std::fs::remove_file(&custom).ok();
+    let output = Command::cargo_bin("doneyet")
+        .expect("binary")
+        .args(["config", "path"])
+        .env("DONEYET_CONFIG", &custom)
+        .output()
+        .expect("run binary");
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert_eq!(stdout, custom.to_string_lossy().to_string(), "{output:?}");
+}
+
+#[test]
+fn config_init_writes_default_file() {
+    let path = std::env::temp_dir().join(format!("doneyet-init-new-{}.toml", std::process::id()));
+    std::fs::remove_file(&path).ok();
+    let output = Command::cargo_bin("doneyet")
+        .expect("binary")
+        .args(["config", "init"])
+        .env("DONEYET_CONFIG", &path)
+        .output()
+        .expect("run binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("doneyet: wrote"), "{stdout}");
+    assert!(
+        stdout.contains(&path.to_string_lossy().to_string()),
+        "{stdout}"
+    );
+    let contents = std::fs::read_to_string(&path).expect("config file written");
+    for key in ["interval", "theme", "notify", "api_base"] {
+        assert!(contents.contains(key), "missing key {key}: {contents}");
+    }
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn config_init_refuses_existing_without_force() {
+    let path =
+        std::env::temp_dir().join(format!("doneyet-init-refuse-{}.toml", std::process::id()));
+    std::fs::write(&path, "sentinel = true\n").expect("write sentinel config");
+    let output = Command::cargo_bin("doneyet")
+        .expect("binary")
+        .args(["config", "init"])
+        .env("DONEYET_CONFIG", &path)
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&path.to_string_lossy().to_string()),
+        "{stderr}"
+    );
+    assert!(stderr.contains("--force"), "{stderr}");
+    let contents = std::fs::read_to_string(&path).expect("config file still readable");
+    assert_eq!(
+        contents, "sentinel = true\n",
+        "existing config must be untouched"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn config_init_force_overwrites() {
+    let path = std::env::temp_dir().join(format!("doneyet-init-force-{}.toml", std::process::id()));
+    std::fs::write(&path, "sentinel = true\n").expect("write sentinel config");
+    let output = Command::cargo_bin("doneyet")
+        .expect("binary")
+        .args(["config", "init", "--force"])
+        .env("DONEYET_CONFIG", &path)
+        .output()
+        .expect("run binary");
+    assert!(output.status.success(), "{output:?}");
+    let contents = std::fs::read_to_string(&path).expect("config file written");
+    for key in ["interval", "theme", "notify", "api_base"] {
+        assert!(contents.contains(key), "missing key {key}: {contents}");
+    }
+    assert!(!contents.contains("sentinel"), "{contents}");
+    std::fs::remove_file(&path).ok();
+}

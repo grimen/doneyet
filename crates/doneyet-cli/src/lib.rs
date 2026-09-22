@@ -204,6 +204,11 @@ pub enum Command {
         #[command(flatten)]
         common: CommonArgs,
     },
+    /// Inspect or initialize the config file
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Generate shell completions
     Completions {
         shell: clap_complete::Shell,
@@ -212,6 +217,17 @@ pub enum Command {
             help = "Write the completion file into the completions directory and print the enable instructions (default: print the script to stdout)"
         )]
         install: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Print the effective config path
+    Path,
+    /// Write a default config file
+    Init {
+        #[arg(long, help = "Overwrite an existing config file")]
+        force: bool,
     },
 }
 
@@ -243,13 +259,14 @@ fn resolve_theme(
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
-const KNOWN_SUBCOMMANDS: [&str; 12] = [
+const KNOWN_SUBCOMMANDS: [&str; 13] = [
     "watch",
     "runs",
     "run",
     "rerun",
     "cancel",
     "dash",
+    "config",
     "completions",
     "help",
     "--help",
@@ -364,6 +381,7 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             realtime,
             common,
         } => replay_file(path, realtime, common).await,
+        Command::Config { command } => config_command(command),
         Command::Completions { shell, install } => {
             if install {
                 let dir = completions::install_dir()?;
@@ -378,6 +396,20 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
                     &mut std::io::stdout(),
                 );
             }
+            Ok(0)
+        }
+    }
+}
+
+fn config_command(command: ConfigCommand) -> anyhow::Result<u32> {
+    match command {
+        ConfigCommand::Path => {
+            println!("{}", config::effective_path()?.display());
+            Ok(0)
+        }
+        ConfigCommand::Init { force } => {
+            let path = config::write_default(&config::effective_path()?, force)?;
+            println!("doneyet: wrote {}", path.display());
             Ok(0)
         }
     }
