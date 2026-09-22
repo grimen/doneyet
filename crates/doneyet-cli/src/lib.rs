@@ -1,5 +1,6 @@
 pub mod completions;
 pub mod config;
+mod dash_json;
 mod hooks;
 pub mod keys;
 pub mod notify;
@@ -136,6 +137,13 @@ pub enum Command {
         branch: Option<String>,
         #[arg(long)]
         event: Option<String>,
+        #[arg(long, help = "Only show runs for this commit SHA")]
+        commit: Option<String>,
+        #[arg(
+            long,
+            help = "Emit one JSON line per polled page; skips the interactive dashboard"
+        )]
+        json: bool,
         #[arg(
             long,
             help = "Poll interval in seconds (defaults to the configured value or 5)"
@@ -363,10 +371,27 @@ async fn dispatch(cli: Cli) -> anyhow::Result<u32> {
             limit,
             branch,
             event,
+            commit,
+            json,
             interval,
             timeout,
             common,
-        } => dash(repo, limit, branch, event, interval, timeout, common).await,
+        } => {
+            dash(
+                DashOptions {
+                    repo,
+                    limit,
+                    branch,
+                    event,
+                    commit,
+                    json,
+                    interval,
+                    timeout,
+                },
+                common,
+            )
+            .await
+        }
         Command::Runs {
             repo,
             limit,
@@ -690,25 +715,28 @@ impl BoardSink for BoardView {
     }
 }
 
-async fn dash(
-    repo_arg: Option<String>,
+struct DashOptions {
+    repo: Option<String>,
     limit: u32,
     branch: Option<String>,
     event: Option<String>,
+    commit: Option<String>,
+    json: bool,
     interval: Option<u64>,
     timeout: Option<u64>,
-    common: CommonArgs,
-) -> anyhow::Result<u32> {
+}
+
+async fn dash(opts: DashOptions, common: CommonArgs) -> anyhow::Result<u32> {
     let config = config::Config::load()?;
-    let interval = config.interval_or(interval, 5).max(1);
-    let repo = repo::resolve(repo_arg.as_deref())?;
+    let interval = config.interval_or(opts.interval, 5).max(1);
+    let repo = repo::resolve(opts.repo.as_deref())?;
     let detected_branch = repo::detect_branch();
     let query = RunsQuery {
         repo: repo.clone(),
-        branch: branch.or(detected_branch),
-        head_sha: None,
-        event,
-        limit,
+        branch: opts.branch.or(detected_branch),
+        head_sha: opts.commit,
+        event: opts.event,
+        limit: opts.limit,
     };
     let provider = build_provider(repo.clone(), &common, &config)?;
     let (hint_tx, push) = ChannelPushSource::channel();
@@ -719,33 +747,41 @@ async fn dash(
             cancel.cancel();
         }
     });
-    let raw_mode = keys::RawModeGuard::enable();
+    let raw_mode = if opts.json {
+        None
+    } else {
+        keys::RawModeGuard::enable()
+    };
     if raw_mode.is_some() {
         eprintln!("(q quit · r refresh)");
         keys::spawn(repo, shutdown.clone(), hint_tx);
     }
-    let stdout: Box<dyn std::io::Write + Send> = if raw_mode.is_some() {
-        Box::new(doneyet_ux::writer::CrLfWriter::new(std::io::stdout()))
+    let mut view: Box<dyn BoardSink> = if opts.json {
+        Box::new(dash_json::DashJsonSink::new(std::io::stdout()))
     } else {
-        Box::new(std::io::stdout())
-    };
-    let mut view = BoardView {
-        redraw: doneyet_ux::InlineRedraw::new(stdout),
-        theme: resolve_theme(&common, &config)?,
-        color: color_enabled(&common),
-        width: terminal_width(&common),
-        now: Box::new(jiff::Timestamp::now),
+        let stdout: Box<dyn std::io::Write + Send> = if raw_mode.is_some() {
+            Box::new(doneyet_ux::writer::CrLfWriter::new(std::io::stdout()))
+        } else {
+            Box::new(std::io::stdout())
+        };
+        Box::new(BoardView {
+            redraw: doneyet_ux::InlineRedraw::new(stdout),
+            theme: resolve_theme(&common, &config)?,
+            color: color_enabled(&common),
+            width: terminal_width(&common),
+            now: Box::new(jiff::Timestamp::now),
+        })
     };
     let mut engine = DashEngine::new(
         Box::new(provider),
         Box::new(push),
         DashConfig {
             interval: Duration::from_secs(interval),
-            timeout: timeout.map(Duration::from_secs),
+            timeout: opts.timeout.map(Duration::from_secs),
         },
         shutdown,
     );
-    let outcome = engine.run(query, &mut view).await?;
+    let outcome = engine.run(query, view.as_mut()).await?;
     drop(raw_mode);
     Ok(outcome.exit_code() as u32)
 }

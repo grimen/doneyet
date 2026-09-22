@@ -26,6 +26,7 @@ doneyet-github = { workspace = true }
 doneyet-ux = { workspace = true }
 jiff = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 toml = { workspace = true }
@@ -36,6 +37,5 @@ doneyet-contract = { workspace = true }
 hex = { workspace = true }
 hmac = { workspace = true }
 reqwest = { workspace = true }
-serde_json = { workspace = true }
 sha2 = { workspace = true }
 wiremock = { workspace = true }

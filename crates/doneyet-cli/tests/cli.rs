@@ -438,6 +438,83 @@ async fn dash_timeout_exits_two_when_runs_never_finish() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn dash_json_emits_one_line_per_page() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "dash",
+            "acme/api",
+            "--json",
+            "--timeout",
+            "1",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.is_empty(), "json mode must emit lines: {stdout}");
+    assert!(
+        !stdout.contains('\x1b'),
+        "no terminal escapes on stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("(q quit"),
+        "no interactive hint on stdout: {stdout}"
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        !lines.is_empty(),
+        "expected at least one page line: {stdout}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(lines[0]).expect("first line parses as JSON");
+    assert_eq!(value["kind"], "page", "{value}");
+    assert!(value["ts"].is_u64(), "{value}");
+    assert_eq!(value["page"]["total_count"], 1, "{value}");
+    assert_eq!(value["page"]["runs"][0]["id"], 2841, "{value}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dash_commit_filters_by_head_sha() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/acme/api/actions/runs"))
+        .and(wiremock::matchers::query_param("head_sha", "abc1234"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(ACTIVE_RUN_PAGE))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    let output = doneyet()
+        .args([
+            "dash",
+            "acme/api",
+            "--commit",
+            "abc1234",
+            "--timeout",
+            "1",
+            "--interval",
+            "1",
+            "--api-base",
+            &server.uri(),
+        ])
+        .timeout(Duration::from_secs(30))
+        .output()
+        .expect("run binary");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn watch_with_webhook_accepts_push_and_completes() {
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
