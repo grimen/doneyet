@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use doneyet_core::logtail::{LogCursor, append_log, append_log_matching, display_lines};
 use doneyet_core::model::{
-    Conclusion, Job, JobLog, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun, World,
+    Annotation, Conclusion, Job, JobLog, Outcome, Phase, RepoRef, RunsPage, RunsQuery, WorkflowRun,
+    World,
 };
 use doneyet_core::ports::{
     AnnotationSource, LogSource, ProviderError, PushSource, RefreshHint, RenderError, Renderer,
@@ -359,6 +360,13 @@ pub trait WatchSource: RunSource + LogSource + AnnotationSource {}
 
 impl<T> WatchSource for T where T: RunSource + LogSource + AnnotationSource {}
 
+#[derive(Debug)]
+enum PhaseStep<T> {
+    Ready(T),
+    BackedOff,
+    Stopped(WatchOutcome),
+}
+
 pub struct WatchEngine {
     repo: RepoRef,
     provider: Box<dyn WatchSource>,
@@ -401,57 +409,15 @@ impl WatchEngine {
             if deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
                 return Ok(WatchOutcome::TimedOut);
             }
-            let run_opt = match self.locate_run(&target).await {
-                Ok(None) => {
-                    if let Some(outcome) = self.wait_tick(self.config.idle_interval, deadline).await
-                    {
-                        return Ok(outcome);
-                    }
-                    None
-                }
-                Ok(Some(run)) => Some(run),
-                Err(ProviderError::RateLimited { retry_after }) => {
-                    tracing::warn!("rate limited; backing off {:?}", retry_after);
-                    let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
-                    if let Some(outcome) = self.wait_tick(backoff, deadline).await {
-                        return Ok(outcome);
-                    }
-                    continue;
-                }
-                Err(ProviderError::Transport(message)) => {
-                    tracing::warn!("transport error ({message}); continuing with polling");
-                    if let Some(outcome) =
-                        self.wait_tick(self.config.active_interval, deadline).await
-                    {
-                        return Ok(outcome);
-                    }
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
+            let run = match self.located_run(&target, deadline).await? {
+                PhaseStep::Ready(run) => run,
+                PhaseStep::BackedOff => continue,
+                PhaseStep::Stopped(outcome) => return Ok(outcome),
             };
-            let Some(run) = run_opt else {
-                continue;
-            };
-            let jobs = match self.provider.list_jobs(run.id).await {
-                Ok(jobs) => jobs,
-                Err(ProviderError::RateLimited { retry_after }) => {
-                    tracing::warn!("rate limited; backing off {:?}", retry_after);
-                    let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
-                    if let Some(outcome) = self.wait_tick(backoff, deadline).await {
-                        return Ok(outcome);
-                    }
-                    continue;
-                }
-                Err(ProviderError::Transport(message)) => {
-                    tracing::warn!("transport error ({message}); continuing with polling");
-                    if let Some(outcome) =
-                        self.wait_tick(self.config.active_interval, deadline).await
-                    {
-                        return Ok(outcome);
-                    }
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
+            let jobs = match self.fetch_jobs(run.id, deadline).await? {
+                PhaseStep::Ready(jobs) => jobs,
+                PhaseStep::BackedOff => continue,
+                PhaseStep::Stopped(outcome) => return Ok(outcome),
             };
             let jobs = filter_jobs(jobs, self.config.job.as_deref());
             let job_logs = self.tail_logs(&jobs).await;
@@ -459,27 +425,11 @@ impl WatchEngine {
                 Some(stats) => Some(stats),
                 None => self.fetch_stats(&target, &run).await,
             };
-            let mut annotations = Vec::new();
-            for job in &jobs {
-                if job.phase.is_failed() {
-                    match self.provider.list_annotations(job.id).await {
-                        Ok(mut ann) => annotations.append(&mut ann),
-                        Err(ProviderError::RateLimited { retry_after }) => {
-                            tracing::warn!(
-                                "annotations rate limited; backing off {:?}",
-                                retry_after
-                            );
-                            let backoff =
-                                rate_limit_backoff(retry_after, self.config.active_interval);
-                            if let Some(outcome) = self.wait_tick(backoff, deadline).await {
-                                return Ok(outcome);
-                            }
-                            continue;
-                        }
-                        Err(e) => tracing::warn!("annotations fetch failed: {e}"),
-                    }
-                }
-            }
+            let annotations = match self.collect_annotations(&jobs, deadline).await {
+                PhaseStep::Ready(annotations) => annotations,
+                PhaseStep::BackedOff => continue,
+                PhaseStep::Stopped(outcome) => return Ok(outcome),
+            };
             let world = World {
                 repo: self.repo.clone(),
                 run,
@@ -512,6 +462,89 @@ impl WatchEngine {
             }
         }
     }
+
+    async fn located_run(
+        &mut self,
+        target: &WatchTarget,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<PhaseStep<WorkflowRun>, EngineError> {
+        match self.locate_run(target).await {
+            Ok(None) => {
+                if let Some(outcome) = self.wait_tick(self.config.idle_interval, deadline).await {
+                    return Ok(PhaseStep::Stopped(outcome));
+                }
+                Ok(PhaseStep::BackedOff)
+            }
+            Ok(Some(run)) => Ok(PhaseStep::Ready(run)),
+            Err(ProviderError::RateLimited { retry_after }) => {
+                tracing::warn!("rate limited; backing off {:?}", retry_after);
+                let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
+                if let Some(outcome) = self.wait_tick(backoff, deadline).await {
+                    return Ok(PhaseStep::Stopped(outcome));
+                }
+                Ok(PhaseStep::BackedOff)
+            }
+            Err(ProviderError::Transport(message)) => {
+                tracing::warn!("transport error ({message}); continuing with polling");
+                if let Some(outcome) = self.wait_tick(self.config.active_interval, deadline).await {
+                    return Ok(PhaseStep::Stopped(outcome));
+                }
+                Ok(PhaseStep::BackedOff)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn fetch_jobs(
+        &mut self,
+        run_id: u64,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<PhaseStep<Vec<Job>>, EngineError> {
+        match self.provider.list_jobs(run_id).await {
+            Ok(jobs) => Ok(PhaseStep::Ready(jobs)),
+            Err(ProviderError::RateLimited { retry_after }) => {
+                tracing::warn!("rate limited; backing off {:?}", retry_after);
+                let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
+                if let Some(outcome) = self.wait_tick(backoff, deadline).await {
+                    return Ok(PhaseStep::Stopped(outcome));
+                }
+                Ok(PhaseStep::BackedOff)
+            }
+            Err(ProviderError::Transport(message)) => {
+                tracing::warn!("transport error ({message}); continuing with polling");
+                if let Some(outcome) = self.wait_tick(self.config.active_interval, deadline).await {
+                    return Ok(PhaseStep::Stopped(outcome));
+                }
+                Ok(PhaseStep::BackedOff)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn collect_annotations(
+        &mut self,
+        jobs: &[Job],
+        deadline: Option<tokio::time::Instant>,
+    ) -> PhaseStep<Vec<Annotation>> {
+        let mut annotations = Vec::new();
+        for job in jobs {
+            if job.phase.is_failed() {
+                match self.provider.list_annotations(job.id).await {
+                    Ok(mut ann) => annotations.append(&mut ann),
+                    Err(ProviderError::RateLimited { retry_after }) => {
+                        tracing::warn!("annotations rate limited; backing off {:?}", retry_after);
+                        let backoff = rate_limit_backoff(retry_after, self.config.active_interval);
+                        if let Some(outcome) = self.wait_tick(backoff, deadline).await {
+                            return PhaseStep::Stopped(outcome);
+                        }
+                    }
+                    Err(e) => tracing::warn!("annotations fetch failed: {e}"),
+                }
+            }
+        }
+        PhaseStep::Ready(annotations)
+    }
+
     async fn wait_tick(
         &mut self,
         interval: Duration,
